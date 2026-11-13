@@ -216,9 +216,9 @@ init_state()
 st.title("📚 책모아 도서관")
 st.caption("캐릭터를 이동해 한줄평·독후감·책갈피 공간을 체험하세요. (API 없이 실행)")
 
-# 메인에서 실제 숏폼 브레이커 PAGE 1으로 이동할 수 있도록 연결.
-# Streamlit은 같은 폴더 아래 pages/의 파일을 자동으로 페이지로 표시한다.
-st.page_link("pages/1_숏폼_브레이커.py", label="🎮 PAGE 1 · 숏폼 브레이커로 이동", use_container_width=True)
+# PAGE 1은 pages 폴더에 있는 기존 코드를 Streamlit이 자동 인식합니다.
+# 메인에서 별도의 page_link는 호출하지 않습니다.
+st.caption("🎮 PAGE 1: 숏폼 브레이커는 기본 페이지 메뉴에서 이동하세요.")
 st.image(draw_library(st.session_state.bm_pos), use_container_width=True)
 
 left, enter, right = st.columns([1, 2, 1])
