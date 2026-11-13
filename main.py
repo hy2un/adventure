@@ -363,4 +363,4 @@ with st.expander("💾 내 기록 저장 / 불러오기 (로그인 없음)"):
         except (ValueError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
             st.error(f"기록 파일을 확인해 주세요: {exc}")
 
-st.caption("MAIN 도서관 | PAGE 1 숏폼 브레이커 (연결 완료)
+st.caption("MAIN 도서관 | PAGE 1 숏폼 브레이커")
