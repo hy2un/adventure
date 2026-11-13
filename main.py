@@ -1,670 +1,366 @@
-"""PHARM SHIFT: 독성학·미생물 연구소 탐험 게임."""
+"""책모아 메인: 캐릭터 이동형 도서관.
 
+실행: streamlit run main.py
+pages/1_숏폼_브레이커.py를 포함한 멀티페이지 프로젝트.
+HTML·CSS·JavaScript·외부 API 사용 없음.
+"""
+import json
+from io import BytesIO
 from pathlib import Path
+
 import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
 
-st.set_page_config(
-    page_title="PHARM SHIFT",
-    page_icon="🧪",
-    layout="centered",
-)
+st.set_page_config(page_title="책모아 | 도서관", page_icon="📚", layout="wide")
 
-ASSETS = Path(__file__).resolve().parent / "assets"
-
-# 두 연구소의 완료 여부는 각각 저장한다.
-DEFAULT_STATE = {
-    "page": "main",
-    "player_name": "학생",
-    "lab": None,
-    "mission_index": 0,
-    "selected_answer": None,
-    "toxic_done": False,
-    "micro_done": False,
+STATIONS = ["한줄평", "독후감", "책갈피"]
+PALETTES = {
+    "크림": ("#F7EFDE", "#78533C", "#453527"),
+    "민트": ("#E1F1E9", "#3A7565", "#24473C"),
+    "라벤더": ("#EEE9F7", "#725A9B", "#44375F"),
 }
-
-LABS = {
-    "toxic": {
-        "name": "독성학 연구소",
-        "title": "TOXIC LAB",
-        "image": "toxic_lab.jpg",
-        "ending_image": "toxic_end.jpg",
-        "intro": "가상 연구소에 경보가 울렸다! 단서를 분석하고 안전하게 탈출하자.",
-        "activities": "연구 기록 탐색 · 세포 생존율 비교 · 안전 절차 판단",
-        "skills": "관찰력 · 자료 해석력 · 안전 의식",
-    },
-    "micro": {
-        "name": "미생물 연구소",
-        "title": "MICRO LAB",
-        "image": "micro_lab.jpg",
-        "ending_image": "micro_end.jpg",
-        "intro": "연구실에서 정체불명의 오염 신호 발견! 관찰 자료를 해독하고 원인을 찾아라.",
-        "activities": "미생물 특징 파악 · 관찰 결과 비교 · 오염 가능성 검토",
-        "skills": "분류 능력 · 논리적 추론 · 정확한 기록",
-    },
-}
-
-# 모든 문제와 정답은 프로그램 안에 저장한다.
-# 외부 API는 사용하지 않는다.
-MISSIONS = {
-    "toxic": [
-        {
-            "title": "사라진 연구 기록",
-            "story": (
-                "밤 10시, 독성학 연구소에서 모의 경보가 울립니다. "
-                "탈출 단서를 찾으려면 마지막 기록이 필요합니다."
-            ),
-            "clue": "단서: 공식 실험 결과는 전자 연구노트에 저장됩니다.",
-            "question": "어디를 먼저 확인할까요?",
-            "choices": [
-                "전자 연구노트가 저장된 컴퓨터",
-                "책상 서랍 속 개인 메모",
-                "실험 장비의 작동 버튼",
-            ],
-            "correct": 0,
-            "feedback": [
-                "연구 기록 발견! 정확한 기록은 결과 검증에 중요합니다.",
-                "공식 기록이 보관된 장소를 다시 찾아보세요.",
-                "기록을 찾기 위해 장비를 임의로 조작해서는 안 됩니다.",
-            ],
-        },
-        {
-            "title": "독성 데이터의 비밀",
-            "story": (
-                "같은 시험 조건에서 얻은 가상 세포 생존율 "
-                "데이터가 화면에 나타납니다."
-            ),
-            "clue": (
-                "가상 데이터 (동일 조건)\n\n"
-                "- 시료 A: 세포 생존율 92%\n"
-                "- 시료 B: 세포 생존율 55%\n"
-                "- 시료 C: 세포 생존율 81%\n\n"
-                "※ 단순화한 교육용 수치이며, 이 결과만으로 "
-                "인체 독성을 단정할 수 없습니다."
-            ),
-            "question": "세포 생존율이 가장 낮아 우선 재검토할 시료는?",
-            "choices": [
-                "시료 A",
-                "시료 B",
-                "시료 C",
-            ],
-            "correct": 1,
-            "feedback": [
-                "A보다 생존율이 낮은 시료가 있습니다.",
-                "정답! B의 생존율이 가장 낮습니다. 원인 파악을 위해 추가 검토가 필요합니다.",
-                "C보다 생존율이 낮은 시료가 있습니다.",
-            ],
-        },
-        {
-            "title": "마지막 탈출 절차",
-            "story": (
-                "출입 제한 구역에서 모의 경보가 발생하고 "
-                "담당자의 대피 안내가 도착했습니다."
-            ),
-            "clue": "상황: 실제 사고가 아닌 가상의 안전 교육 상황입니다.",
-            "question": "가장 적절한 대응은 무엇일까요?",
-            "choices": [
-                "경보를 무시하고 실험을 계속한다",
-                "혼자 경보 구역으로 들어간다",
-                "작업을 중단하고 담당자 지시에 따라 대피한다",
-            ],
-            "correct": 2,
-            "feedback": [
-                "경보를 무시하면 안 됩니다.",
-                "위험이 의심되는 구역에 임의로 진입하면 안 됩니다.",
-                "정답! 안전 절차에 따라 연구소를 탈출했습니다.",
-            ],
-        },
-    ],
-
-    "micro": [
-        {
-            "title": "현미경 관찰 기록",
-            "story": (
-                "미생물 연구소의 관찰 카드가 뒤섞였습니다. "
-                "첫 번째 단서를 찾아야 합니다."
-            ),
-            "clue": (
-                "관찰 카드: 타원형 세포 일부에서 "
-                "작은 돌기가 자라나고 있습니다.\n\n"
-                "단서: 일부 효모는 출아 방식으로 번식합니다."
-            ),
-            "question": "이 관찰 특징과 가장 잘 어울리는 미생물은?",
-            "choices": [
-                "효모",
-                "바이러스",
-                "적혈구",
-            ],
-            "correct": 0,
-            "feedback": [
-                "정답! 출아는 일부 효모에서 관찰되는 번식 방식입니다.",
-                "바이러스는 이처럼 출아하는 세포 자체로 관찰되는 생물이 아닙니다.",
-                "적혈구는 미생물이 아닙니다. 단서의 '출아'에 주목하세요.",
-            ],
-        },
-        {
-            "title": "오염 의심 시료 찾기",
-            "story": (
-                "동일한 관찰 조건에서 얻은 "
-                "가상의 집락 수 기록이 나타났습니다."
-            ),
-            "clue": (
-                "모의 판정 기준: 집락 수 2개 이하\n\n"
-                "- 시료 A: 0개\n"
-                "- 시료 B: 8개\n"
-                "- 시료 C: 1개\n\n"
-                "※ 교육용 가상 데이터이며 실제 시험 기준은 아닙니다."
-            ),
-            "question": "정해진 모의 기준을 초과한 시료는?",
-            "choices": [
-                "시료 A",
-                "시료 B",
-                "시료 C",
-            ],
-            "correct": 1,
-            "feedback": [
-                "A는 기준 이내입니다. 다시 비교해 보세요.",
-                "정답! B는 모의 기준을 초과했습니다. 오염 가능성을 검토해야 합니다.",
-                "C는 기준 이내입니다. 다시 비교해 보세요.",
-            ],
-        },
-        {
-            "title": "최종 오염 원인 조사",
-            "story": (
-                "미생물이 없어야 하는 음성 대조군에서도 "
-                "집락이 관찰되었습니다."
-            ),
-            "clue": (
-                "단서: 음성 대조군은 실험 과정의 "
-                "오염 가능성을 확인할 때 도움을 줍니다.\n\n"
-                "이번 기록에서는 대조군에서도 집락이 관찰되었습니다."
-            ),
-            "question": "연구 보고서에 가장 적절하게 기록할 내용은?",
-            "choices": [
-                "다른 시료의 결과는 모두 정확하다고 확정한다",
-                "대조군 이상을 무시하고 결과만 제출한다",
-                "실험 과정의 오염 가능성을 기록하고 결과 재검토를 요청한다",
-            ],
-            "correct": 2,
-            "feedback": [
-                "대조군 이상이 있으면 결과의 신뢰성을 먼저 검토해야 합니다.",
-                "대조군 결과는 무시하면 안 됩니다.",
-                "정답! 이상을 기록하고 재검토를 요청해 연구 보고서를 마무리했습니다.",
-            ],
-        },
-    ],
-}
+FONT_PATHS = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "C:/Windows/Fonts/malgun.ttf",
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+]
 
 
-# ---------------------------
-# 게임 상태 관리
-# ---------------------------
+def korean_font(size):
+    """운영체제에 있는 한글 폰트를 탐색한다."""
+    for path in FONT_PATHS:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
 
-def initialize_state():
-    """최초 실행 때에만 필요한 게임 상태를 만든다."""
-    for key, value in DEFAULT_STATE.items():
+
+def draw_center(draw, text, center_x, y, font, fill):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text((center_x - (bbox[2] - bbox[0]) / 2, y), text, font=font, fill=fill)
+
+
+def wrap_pixels(draw, text, font, max_width):
+    """한글과 영문을 픽셀 너비에 맞춰 줄바꿈한다."""
+    lines, part = [], ""
+    for ch in text:
+        if ch == "\n":
+            lines.append(part)
+            part = ""
+        elif draw.textbbox((0, 0), part + ch, font=font)[2] <= max_width:
+            part += ch
+        else:
+            if part:
+                lines.append(part)
+            part = ch
+    if part:
+        lines.append(part)
+    return lines
+
+
+@st.cache_data(show_spinner=False)
+def draw_library(position):
+    """배경과 캐릭터를 합친 도서관 이미지 생성(Pillow만 사용)."""
+    width, height = 1170, 465
+    img = Image.new("RGB", (width, height), "#F2E6D5")
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, width, 344), fill="#F0E3D1")
+    d.rectangle((0, 0, width, 25), fill="#9F7659")
+    d.rectangle((0, 344, width, height), fill="#D5B99A")
+    for x in range(0, width, 90):
+        d.line((x, 344, x + 55, height), fill="#B99D82", width=2)
+    d.line((0, 344, width, 344), fill="#96735B", width=7)
+
+    centers = [200, 585, 970]
+    shelf_tints = ["#9D6E56", "#648D89", "#85709C"]
+    spine_colors = ["#C69271", "#628DA6", "#B0A66D", "#997DA8", "#7B9E7D"]
+    for idx, cx in enumerate(centers):
+        x0, x1 = cx - 158, cx + 158
+        d.rounded_rectangle((x0, 121, x1, 341), radius=10, fill="#946E50", outline="#6E4B37", width=5)
+        d.rectangle((x0 + 15, 136, x1 - 15, 328), fill="#5B4537")
+        for row, sy in enumerate((148, 207, 267)):
+            for j in range(12):
+                sx = x0 + 23 + 23 * j
+                bh = 32 + (j * 5 + row * 2) % 13
+                d.rectangle((sx, sy + 43 - bh, sx + 15, sy + 43), fill=spine_colors[(j + row) % len(spine_colors)])
+            d.rectangle((x0 + 11, sy + 43, x1 - 11, sy + 51), fill="#B18560")
+        d.rounded_rectangle((cx - 119, 57, cx + 119, 111), radius=17, fill="#FFF9ED", outline=shelf_tints[idx], width=4)
+        draw_center(d, STATIONS[idx], cx, 62, korean_font(29), shelf_tints[idx])
+        if position == idx:
+            d.rounded_rectangle((x0 - 2, 119, x1 + 2, 342), radius=11, outline="#FFD36D", width=8)
+
+    # 캐릭터의 위치는 서가 선택에 따라 변경된다.
+    cx = centers[position]
+    d.ellipse((cx - 40, 433, cx + 40, 448), fill="#B5A18D")
+    d.line((cx - 14, 408, cx - 18, 438), fill="#394A5D", width=13)
+    d.line((cx + 14, 408, cx + 18, 438), fill="#394A5D", width=13)
+    d.rounded_rectangle((cx - 32, 361, cx + 32, 417), radius=15, fill="#5681A3")
+    d.line((cx - 31, 376, cx - 51, 407), fill="#F0C6A2", width=11)
+    d.line((cx + 31, 376, cx + 51, 407), fill="#F0C6A2", width=11)
+    d.ellipse((cx - 29, 304, cx + 29, 365), fill="#F0C6A2")
+    d.pieslice((cx - 31, 298, cx + 31, 357), 170, 365, fill="#514039")
+    d.ellipse((cx - 13, 335, cx - 9, 339), fill="#34303A")
+    d.ellipse((cx + 9, 335, cx + 13, 339), fill="#34303A")
+    d.arc((cx - 10, 343, cx + 10, 352), 0, 180, fill="#9B6A5C", width=2)
+    d.rounded_rectangle((cx - 80, 445, cx + 80, 464), radius=7, fill="#F6F0E6")
+    draw_center(d, "현재 위치", cx, 446, korean_font(14), "#39546A")
+    return img
+
+
+def make_bookmark(title, author, quote, palette_name):
+    """직접 쓴 문장으로 책갈피 PNG 파일을 만든다."""
+    bg, accent, ink = PALETTES[palette_name]
+    w, h = 540, 900
+    img = Image.new("RGB", (w, h), bg)
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((22, 22, w - 22, h - 22), radius=25, outline=accent, width=5)
+    draw_center(d, "MY BOOKMARK", w // 2, 80, korean_font(27), accent)
+    d.line((80, 140, w - 80, 140), fill=accent, width=3)
+
+    title_font = korean_font(35)
+    for n, line in enumerate(wrap_pixels(d, title, title_font, 410)[:3]):
+        draw_center(d, line, w // 2, 186 + n * 54, title_font, ink)
+    if author:
+        draw_center(d, author[:25], w // 2, 352, korean_font(20), accent)
+
+    body_font = korean_font(29)
+    quote_lines = wrap_pixels(d, quote, body_font, 390)
+    if len(quote_lines) > 7:
+        raise ValueError("책갈피 문장이 너무 깁니다. 7줄 이내로 줄여 주세요.")
+    start_y = 500 - len(quote_lines) * 24
+    for n, line in enumerate(quote_lines):
+        draw_center(d, line, w // 2, start_y + n * 49, body_font, ink)
+    d.line((80, 797, w - 80, 797), fill=accent, width=3)
+    draw_center(d, "책모아 도서관", w // 2, 822, korean_font(24), accent)
+
+    output = BytesIO()
+    img.save(output, format="PNG")
+    return output.getvalue()
+
+
+def book_key(title, author):
+    return title.strip().casefold() + "|" + author.strip().casefold()
+
+
+def init_state():
+    defaults = {
+        "bm_pos": 0,
+        "bm_active": None,
+        "bm_books": {},
+        "bm_current": None,
+        "bm_reviews": {},
+        "bm_reports": {},
+        "bm_bookmark_png": None,
+    }
+    for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-def reset_game():
-    """메인 복귀 시 이전 진행 기록을 초기화한다."""
-    for key, value in DEFAULT_STATE.items():
-        st.session_state[key] = value
-
-    st.session_state["name_input"] = ""
-
-
-def move(page):
-    """지정된 화면으로 이동한다."""
-    st.session_state["page"] = page
-    st.rerun()
-
-
-def show_image(filename, description):
-    """이미지 파일이 누락되어도 게임은 계속 실행된다."""
-    path = ASSETS / filename
-
-    if path.is_file():
-        try:
-            st.image(str(path), use_container_width=True)
-            return
-        except Exception:
-            pass
-
-    st.caption(f"🖼️ {description} (이미지 추가 예정)")
-
-
-def show_home_button():
-    """메인 외 화면에 메인 이동 버튼을 표시한다."""
-    if st.session_state["page"] != "main":
-        if st.button("⌂ 메인으로", key="home_button"):
-            reset_game()
-            st.rerun()
-
-
-# ---------------------------
-# 메인 화면
-# ---------------------------
-
-def show_main():
-    st.title("PHARM SHIFT")
-    st.subheader("선택한 하루, 서로 다른 약학의 세계")
-
-    show_image("school.jpg", "학교 진로 체험 안내")
-
-    st.markdown("### 교내 연구소 탐험 프로그램 참가자 모집")
-
-    st.write(
-        "독성학과 미생물 연구소에서 "
-        "각각 세 가지 미션에 도전해 보세요!"
-    )
-
-    st.info("실제 실험이 아닌 교육용 가상 체험입니다.")
-
-    if st.button(
-        "체험 신청하기",
-        type="primary",
-        use_container_width=True,
-    ):
-        reset_game()
-        move("register")
-
-
-# ---------------------------
-# 참가 신청 화면
-# ---------------------------
-
-def show_register():
-    st.header("참가 신청")
-
-    name = st.text_input(
-        "참가자 이름",
-        key="name_input",
-        max_chars=20,
-        placeholder="입력하지 않으면 '학생'으로 진행",
-    )
-
-    if st.button(
-        "신청 완료",
-        type="primary",
-        use_container_width=True,
-    ):
-        st.session_state["player_name"] = name.strip() or "학생"
-        move("orientation")
-
-
-# ---------------------------
-# 오리엔테이션 화면
-# ---------------------------
-
-def show_orientation():
-    st.header("오리엔테이션")
-
-    name = st.session_state["player_name"]
-
-    st.write(
-        f"안내 NPC: 안녕, {name}! "
-        "두 연구소 중 한 곳을 선택해 탐험해 봐."
-    )
-
-    st.write(
-        "독성학 연구소에서는 경보의 원인을 찾고 탈출하게 돼."
-    )
-
-    st.write(
-        "미생물 연구소에서는 관찰 자료를 분석하고 "
-        "오염 의심 원인을 조사해."
-    )
-
-    st.write(
-        "두 연구소를 모두 완료하면 "
-        "특별 엔딩과 가상 수료증이 열려!"
-    )
-
-    if st.button(
-        "연구소 선택하기",
-        type="primary",
-        use_container_width=True,
-    ):
-        move("choose")
-
-
-# ---------------------------
-# 연구소 선택 화면
-# ---------------------------
-
-def start_lab(lab):
-    """선택한 연구소의 진행 상태만 초기화한다."""
-    st.session_state["lab"] = lab
-    st.session_state["mission_index"] = 0
-    st.session_state["selected_answer"] = None
-
-    # 다른 연구소의 완료 기록은 유지한다.
-    move("mission")
-
-
-def show_choose():
-    st.header("연구소 선택")
-
-    st.write(
-        f"{st.session_state['player_name']} 학생, "
-        "어디부터 탐험할까요?"
-    )
-
-    for lab in ("toxic", "micro"):
-        info = LABS[lab]
-
-        st.subheader(f"{info['title']} · {info['name']}")
-
-        show_image(info["image"], info["name"])
-
-        st.write(info["intro"])
-
-        if st.session_state[f"{lab}_done"]:
-            st.success(
-                "체험 완료! 다시 탐험할 수도 있습니다."
-            )
-
-        if st.button(
-            f"{info['name']} 탐험하기",
-            key=f"start_{lab}",
-            use_container_width=True,
-        ):
-            start_lab(lab)
-
-        st.divider()
-
-
-# ---------------------------
-# 연구소별 미션 화면
-# ---------------------------
-
-def show_mission():
-    lab = st.session_state["lab"]
-    index = st.session_state["mission_index"]
-
-    # 잘못된 연구소 또는 미션 번호 검사
-    if lab not in MISSIONS or not 0 <= index < len(MISSIONS[lab]):
-        st.error(
-            "미션 상태가 올바르지 않습니다. "
-            "메인으로 돌아가 주세요."
-        )
-        return
-
-    info = LABS[lab]
-    task = MISSIONS[lab][index]
-    count = len(MISSIONS[lab])
-
-    st.header(f"{info['title']} · {info['name']}")
-
-    st.progress(
-        index / count,
-        text=f"완료한 미션 {index}/{count}",
-    )
-
-    show_image(info["image"], info["name"])
-
-    st.subheader(
-        f"MISSION {index + 1}. {task['title']}"
-    )
-
-    st.write(task["story"])
-    st.info(task["clue"])
-    st.write(f"**{task['question']}**")
-
-    selected = st.session_state["selected_answer"]
-
-    # 답을 선택하기 전
-    if selected is None:
-        for i, choice in enumerate(task["choices"]):
-            if st.button(
-                f"{chr(65 + i)}. {choice}",
-                key=f"answer_{lab}_{index}_{i}",
-                use_container_width=True,
-            ):
-                st.session_state["selected_answer"] = i
-                st.rerun()
-        return
-
-    # 정답 처리
-    if selected == task["correct"]:
-        st.success(task["feedback"][selected])
-
-        last = index == count - 1
-
-        if last:
-            label = "연구소 엔딩 보기"
-        else:
-            label = "다음 미션"
-
-        if st.button(
-            label,
-            type="primary",
-            use_container_width=True,
-        ):
-            if last:
-                st.session_state[f"{lab}_done"] = True
-                move("ending")
-            else:
-                st.session_state["mission_index"] += 1
-                st.session_state["selected_answer"] = None
-                st.rerun()
-
-    # 오답 처리
-    else:
-        st.warning(task["feedback"][selected])
-
-        if st.button(
-            "다시 선택하기",
-            use_container_width=True,
-        ):
-            st.session_state["selected_answer"] = None
-            st.rerun()
-
-
-# ---------------------------
-# 연구소별 엔딩 화면
-# ---------------------------
-
-def show_ending():
-    lab = st.session_state["lab"]
-
-    if lab not in LABS or not st.session_state[f"{lab}_done"]:
-        st.warning(
-            "모든 미션을 완료해야 엔딩을 볼 수 있습니다."
-        )
-        return
-
-    info = LABS[lab]
-
-    st.header(f"{info['title']} — CLEAR!")
-
-    show_image(
-        info["ending_image"],
-        f"{info['name']} 엔딩",
-    )
-
-    if lab == "toxic":
-        st.write(
-            "연구 기록과 독성 데이터를 분석하고 "
-            "안전 절차를 따라 탈출했습니다!"
-        )
-
-        st.write(
-            "안내 NPC: 독성학은 물질이 생체에 미치는 "
-            "유해한 영향을 연구하는 분야야."
-        )
-
-    else:
-        st.write(
-            "미생물 관찰 기록을 확인하고 오염 가능성에 대한 "
-            "보고서를 완성했습니다!"
-        )
-
-        st.write(
-            "안내 NPC: 미생물학은 미생물의 특징과 "
-            "활동을 연구하는 분야야."
-        )
-
-    if st.button(
-        "체험 결과 확인하기",
-        type="primary",
-        use_container_width=True,
-    ):
-        move("result")
-
-
-# ---------------------------
-# 체험 결과 화면
-# ---------------------------
-
-def show_result():
-    lab = st.session_state["lab"]
-
-    if lab not in LABS or not st.session_state[f"{lab}_done"]:
-        st.warning("완료한 체험 결과가 없습니다.")
-        return
-
-    info = LABS[lab]
-
-    st.header("체험 결과")
-
-    st.write(
-        f"참가자: {st.session_state['player_name']}"
-    )
-
-    st.write(f"완료 연구소: {info['name']}")
-
-    st.metric("완료 미션", "3 / 3")
-
-    st.write(f"수행 활동: {info['activities']}")
-    st.write(f"관련 역량: {info['skills']}")
-
-    # 두 연구소를 모두 완료했는지 검사
-    if (
-        st.session_state["toxic_done"]
-        and st.session_state["micro_done"]
-    ):
-        st.success(
-            "두 연구소를 모두 완료했습니다! "
-            "특별 엔딩이 열렸습니다."
-        )
-
-        if st.button(
-            "특별 엔딩 보기",
-            type="primary",
-            use_container_width=True,
-        ):
-            move("bonus")
-
-    else:
-        st.info(
-            "다른 연구소까지 완료하면 특별 엔딩이 열립니다."
-        )
-
-    if st.button(
-        "다른 연구소 탐험하기",
-        use_container_width=True,
-    ):
-        move("choose")
-
-    if st.button(
-        "처음으로 돌아가기",
-        use_container_width=True,
-    ):
-        reset_game()
-        st.rerun()
-
-
-# ---------------------------
-# 특별 엔딩 화면
-# ---------------------------
-
-def show_bonus():
-    # 두 연구소 모두 완료해야 특별 엔딩 진입
-    if not (
-        st.session_state["toxic_done"]
-        and st.session_state["micro_done"]
-    ):
-        st.warning(
-            "두 연구소를 모두 완료해야 볼 수 있는 화면입니다."
-        )
-        return
-
-    st.title("PHARM SHIFT COMPLETE!")
-
-    st.subheader(
-        "특별 엔딩 · 두 연구소의 연결고리"
-    )
-
-    st.write(
-        f"축하해, {st.session_state['player_name']}!"
-    )
-
-    st.write(
-        "독성학 연구소에서는 물질의 유해한 영향을, "
-        "미생물 연구소에서는 미생물의 특징과 "
-        "오염 가능성을 조사했어."
-    )
-
-    st.write(
-        "두 분야 모두 관찰·기록·자료 해석을 바탕으로 "
-        "과학적 결론을 검토한다는 공통점이 있어."
-    )
-
-    st.divider()
-
-    st.subheader("🏅 가상 연구소 탐험 수료증")
-
-    st.write(
-        f"참가자: {st.session_state['player_name']}"
-    )
-
-    st.write(
-        "완료 연구소: 독성학 연구소 · 미생물 연구소"
-    )
-
-    st.write("완료 미션: 6 / 6")
-
-    st.caption(
-        "게임 내 교육용 수료증이며 "
-        "실제 공식 자격이나 수료를 뜻하지 않습니다."
-    )
-
-    if st.button(
-        "처음으로 돌아가기",
-        type="primary",
-        use_container_width=True,
-    ):
-        reset_game()
-        st.rerun()
-
-
-# ---------------------------
-# 메인 프로그램 실행
-# ---------------------------
-
-def main():
-    initialize_state()
-    show_home_button()
-
-    # 현재 페이지에 따라 실행할 함수 선택
-    pages = {
-        "main": show_main,
-        "register": show_register,
-        "orientation": show_orientation,
-        "choose": show_choose,
-        "mission": show_mission,
-        "ending": show_ending,
-        "result": show_result,
-        "bonus": show_bonus,
+def make_report(book, record):
+    return (f"[{book['title']}] 독후감\n저자: {book['author']}\n\n"
+            f"1. 읽게 된 이유\n{record['reason']}\n\n"
+            f"2. 인상 깊었던 내용\n{record['scene']}\n\n"
+            f"3. 읽고 난 뒤의 생각\n{record['thought']}")
+
+
+def export_records():
+    return json.dumps({
+        "version": 1,
+        "books": st.session_state.bm_books,
+        "current": st.session_state.bm_current,
+        "reviews": st.session_state.bm_reviews,
+        "reports": st.session_state.bm_reports,
+    }, ensure_ascii=False, indent=2).encode("utf-8-sig")
+
+
+def import_records(data):
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError("책모아 기록 파일 형식이 아닙니다.")
+    books, reviews, reports = (data.get(x) for x in ("books", "reviews", "reports"))
+    if not isinstance(books, dict) or not isinstance(reviews, dict) or not isinstance(reports, dict):
+        raise ValueError("필수 기록 항목이 없습니다.")
+    if len(books) > 100:
+        raise ValueError("도서 수가 너무 많습니다.")
+    valid_books = {}
+    for key, value in books.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        title, author = value.get("title"), value.get("author")
+        if not isinstance(title, str) or not isinstance(author, str):
+            continue
+        if title.strip() and len(title) <= 100 and len(author) <= 70:
+            valid_books[key] = {"title": title, "author": author}
+    st.session_state.bm_books = valid_books
+    st.session_state.bm_reviews = {
+        key: value for key, value in reviews.items()
+        if key in valid_books and isinstance(value, dict)
+        and isinstance(value.get("text"), str)
+        and isinstance(value.get("rating"), int)
+        and 1 <= value["rating"] <= 5
+        and len(value["text"]) <= 100
     }
+    st.session_state.bm_reports = {
+        key: value for key, value in reports.items()
+        if key in valid_books and isinstance(value, dict)
+        and all(isinstance(value.get(f), str) and len(value[f]) <= 5000
+                for f in ("reason", "scene", "thought"))
+    }
+    current = data.get("current")
+    st.session_state.bm_current = current if current in valid_books else None
+    st.session_state.bm_bookmark_png = None
 
-    pages.get(
-        st.session_state["page"],
-        show_main,
-    )()
 
+# ────────────────── 화면 시작 ──────────────────
+init_state()
+st.title("📚 책모아 도서관")
+st.caption("캐릭터를 이동해 한줄평·독후감·책갈피 공간을 체험하세요. (API 없이 실행)")
 
-if __name__ == "__main__":
-    main()
+# 메인에서 실제 숏폼 브레이커 PAGE 1으로 이동할 수 있도록 연결.
+# Streamlit은 같은 폴더 아래 pages/의 파일을 자동으로 페이지로 표시한다.
+st.page_link("pages/1_숏폼_브레이커.py", label="🎮 PAGE 1 · 숏폼 브레이커로 이동", use_container_width=True)
+st.image(draw_library(st.session_state.bm_pos), use_container_width=True)
+
+left, enter, right = st.columns([1, 2, 1])
+with left:
+    if st.button("◀ 왼쪽", disabled=st.session_state.bm_pos == 0, use_container_width=True):
+        st.session_state.bm_pos -= 1
+        st.session_state.bm_active = None
+        st.rerun()
+with enter:
+    if st.button(f"🚪 {STATIONS[st.session_state.bm_pos]} 공간 입장", type="primary", use_container_width=True):
+        st.session_state.bm_active = st.session_state.bm_pos
+        st.rerun()
+with right:
+    if st.button("오른쪽 ▶", disabled=st.session_state.bm_pos == 2, use_container_width=True):
+        st.session_state.bm_pos += 1
+        st.session_state.bm_active = None
+        st.rerun()
+
+st.divider()
+st.subheader("📖 활동할 책 선택")
+with st.form("add_book", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    title = col1.text_input("책 제목 *", max_chars=100)
+    author = col2.text_input("저자(선택)", max_chars=70)
+    add_book = st.form_submit_button("이 책으로 활동하기")
+if add_book:
+    if not title.strip():
+        st.warning("책 제목을 입력해 주세요.")
+    else:
+        key = book_key(title, author)
+        st.session_state.bm_books[key] = {"title": title.strip(), "author": author.strip()}
+        st.session_state.bm_current = key
+        st.session_state.bm_bookmark_png = None
+        st.rerun()
+
+if st.session_state.bm_books:
+    ids = list(st.session_state.bm_books)
+    current_id = st.session_state.bm_current
+    selected_id = st.selectbox(
+        "이전에 등록한 책 선택",
+        ids,
+        index=ids.index(current_id) if current_id in ids else 0,
+        format_func=lambda k: st.session_state.bm_books[k]["title"],
+    )
+    if selected_id != current_id:
+        if st.button("선택한 책으로 변경하기"):
+            st.session_state.bm_current = selected_id
+            st.session_state.bm_bookmark_png = None
+            st.rerun()
+else:
+    st.info("책 제목을 먼저 등록해 주세요. 고정된 테마별 도서 목록과 API 검색은 없습니다.")
+
+current_id = st.session_state.bm_current
+book = st.session_state.bm_books.get(current_id) if current_id else None
+if st.session_state.bm_active is None:
+    st.info("캐릭터를 이동한 뒤 '공간 입장'을 눌러 활동을 시작하세요.")
+elif book is None:
+    st.info("위에서 활동할 책을 등록하면 선택한 공간을 이용할 수 있습니다.")
+else:
+    st.divider()
+    st.subheader(f"✏️ {STATIONS[st.session_state.bm_active]} · {book['title']}")
+    if st.session_state.bm_active == 0:
+        saved = st.session_state.bm_reviews.get(current_id, {})
+        with st.form(f"review_{current_id}"):
+            rating = st.slider("별점", 1, 5, int(saved.get("rating", 3)))
+            review_text = st.text_area("한줄평 (10~100자)", value=saved.get("text", ""), height=100)
+            save_review = st.form_submit_button("한줄평 저장", type="primary")
+        if save_review:
+            clean = review_text.strip()
+            if not 10 <= len(clean) <= 100:
+                st.warning("한줄평은 10~100자 사이로 작성해 주세요.")
+            else:
+                st.session_state.bm_reviews[current_id] = {"rating": rating, "text": clean}
+                st.success("한줄평을 저장했습니다.")
+                st.rerun()
+        if saved:
+            st.success("⭐" * saved["rating"] + "  " + saved["text"])
+            if st.button("한줄평 삭제"):
+                st.session_state.bm_reviews.pop(current_id, None)
+                st.rerun()
+
+    elif st.session_state.bm_active == 1:
+        saved = st.session_state.bm_reports.get(current_id, {})
+        with st.form(f"report_{current_id}"):
+            reason = st.text_area("1. 책을 읽게 된 이유", value=saved.get("reason", ""), height=95)
+            scene = st.text_area("2. 인상 깊었던 내용", value=saved.get("scene", ""), height=100)
+            thought = st.text_area("3. 읽고 난 뒤의 생각", value=saved.get("thought", ""), height=100)
+            save_report = st.form_submit_button("독후감 저장", type="primary")
+        if save_report:
+            if not all(x.strip() for x in (reason, scene, thought)):
+                st.warning("세 항목을 모두 작성해 주세요.")
+            else:
+                st.session_state.bm_reports[current_id] = {
+                    "reason": reason.strip(), "scene": scene.strip(), "thought": thought.strip()
+                }
+                st.success("독후감을 저장했습니다.")
+                st.rerun()
+        if saved:
+            full_text = make_report(book, saved)
+            st.text_area("저장된 독후감 미리보기", full_text, height=260, disabled=True)
+            st.download_button("독후감 TXT 다운로드", full_text.encode("utf-8-sig"),
+                               file_name="bookmoa_report.txt", mime="text/plain")
+            if st.button("독후감 삭제"):
+                st.session_state.bm_reports.pop(current_id, None)
+                st.rerun()
+
+    elif st.session_state.bm_active == 2:
+        review = st.session_state.bm_reviews.get(current_id, {}).get("text", "")
+        quote = st.text_area("책갈피 문장 (직접 작성 가능)", value=review,
+                             max_chars=100, key=f"quote_{current_id}")
+        design = st.selectbox("디자인 색상", list(PALETTES), key="bm_palette")
+        if st.button("책갈피 PNG 만들기", type="primary"):
+            if not quote.strip():
+                st.warning("책갈피에 넣을 문장을 작성해 주세요.")
+            else:
+                try:
+                    st.session_state.bm_bookmark_png = make_bookmark(
+                        book["title"], book["author"], quote.strip(), design
+                    )
+                    st.rerun()
+                except ValueError as exc:
+                    st.warning(str(exc))
+        if st.session_state.bm_bookmark_png is not None:
+            st.image(st.session_state.bm_bookmark_png, width=260)
+            st.download_button("📥 PNG 다운로드", data=st.session_state.bm_bookmark_png,
+                               file_name="bookmoa_bookmark.png", mime="image/png")
+
+st.divider()
+with st.expander("💾 내 기록 저장 / 불러오기 (로그인 없음)"):
+    st.caption("작성 내용은 현재 세션에서 유지됩니다. 나중에 이어 하려면 JSON을 다운로드하고 다음에 다시 불러오세요.")
+    st.download_button("기록 JSON 다운로드", export_records(),
+                       file_name="bookmoa_records.json", mime="application/json")
+    uploaded = st.file_uploader("기록 파일 선택", type=["json"])
+    if uploaded is not None and st.button("저장된 기록 불러오기"):
+        try:
+            if len(uploaded.getvalue()) > 500_000:
+                raise ValueError("500KB 이하의 파일을 선택해 주세요.")
+            raw = uploaded.getvalue().decode("utf-8-sig")
+            import_records(json.loads(raw))
+            st.success("기록을 불러왔습니다.")
+            st.rerun()
+        except (ValueError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+            st.error(f"기록 파일을 확인해 주세요: {exc}")
+
+st.caption("MAIN 도서관 | PAGE 1 숏폼 브레이커 (연결 완료)
