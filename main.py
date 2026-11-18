@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 ROOT = Path(__file__).resolve().parent
-CHARACTER_PATH = ROOT / "assets" / "reader_character.png"
+CHARACTER_PATH = ROOT / "reader_character.png"
 DB_PATH = Path(tempfile.gettempdir()) / "bookmoa_local" / "records.db"
 
 ZONES = ["한줄평", "독후감", "책갈피"]
