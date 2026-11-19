@@ -209,7 +209,7 @@ def delete_record(table, key):
 
 # ── 그림 ──
 @st.cache_data(show_spinner=False)
-def shelf_image(index, selected):
+def shelf_image(index, character_here, zone_selected):
     w, h = 440, 370
     base = Image.new("RGBA", (w, h), ["#FFF1E4", "#E4F2EB", "#F1E9F8"][index])
     d = ImageDraw.Draw(base)
@@ -237,7 +237,7 @@ def shelf_image(index, selected):
             d.line((x + 5, top + 5, x + 5, top + 13), fill="#FFF4E9", width=2)
         d.rectangle((49, y, 391, y + 11), fill=trim)
 
-    if selected:
+    if character_here:
         # 수제 도형 대신 별도로 준비한 고화질 캐릭터 PNG를 합성한다.
         if CHARACTER_PATH.exists():
             with Image.open(CHARACTER_PATH) as raw:
@@ -250,8 +250,22 @@ def shelf_image(index, selected):
             d.ellipse((174, 208, 266, 300), fill="#FFD8C2")
             d.ellipse((197, 240, 204, 249), fill="#403134")
             d.ellipse((235, 240, 242, 249), fill="#403134")
-        d.rounded_rectangle((5, 5, w - 5, h - 5), radius=20,
-                            outline="#F6C34E", width=7)
+    # 캐릭터 위치와 실제 책장 선택을 서로 다른 색으로 구분한다.
+    # 노란색: 캐릭터가 도착함 / 초록색: 이용할 책장을 확정함.
+    if zone_selected:
+        d.rounded_rectangle(
+            (5, 5, w - 5, h - 5), radius=20,
+            outline="#16845D", width=11,
+        )
+        d.ellipse((354, 8, 423, 77), fill="#16845D")
+        d.line((371, 41, 386, 56, 410, 27),
+               fill="#FFFFFF", width=8, joint="curve")
+    elif character_here:
+        d.rounded_rectangle(
+            (5, 5, w - 5, h - 5), radius=20,
+            outline="#F6C34E", width=7,
+        )
+
     return base.convert("RGB")
 
 
@@ -447,7 +461,8 @@ def register_api_book(book):
         st.session_state.bm_books[key] = data
         st.session_state.bm_selected = key
         st.session_state.bm_png = None
-        st.session_state.bm_zone = 0
+        # 도서를 등록해도 책장을 자동 선택하지 않는다.
+        # 이용할 책장은 사용자가 직접 확정하도록 한다.
         st.rerun()
 
 
@@ -637,38 +652,119 @@ with st.sidebar:
 
 
 st.subheader("🏛️ 도서관 둘러보기")
-cols = st.columns(3, gap="small")
-for i, c in enumerate(cols):
-    with c:
-        st.markdown(f"#### {EMOJIS[i]} {ZONES[i]} 책장")
-        st.image(shelf_image(i, i == st.session_state.bm_pos), use_container_width=True)
+st.caption(
+    "① 캐릭터를 책장 앞으로 이동 → ② '책장 선택하기' 클릭 → "
+    "③ 활동할 책 선택의 순서로 진행하세요."
+)
 
+cols = st.columns(3, gap="small")
+for i, col in enumerate(cols):
+    with col:
+        st.markdown(f"#### {EMOJIS[i]} {ZONES[i]} 책장")
+        st.image(
+            shelf_image(
+                i,
+                character_here=(i == st.session_state.bm_pos),
+                zone_selected=(i == st.session_state.bm_zone),
+            ),
+            use_container_width=True,
+        )
+
+        if i == st.session_state.bm_zone:
+            st.success("✅ 선택 완료 · 이용 중")
+        elif i == st.session_state.bm_pos:
+            st.info("📍 캐릭터 도착 · 아직 선택 전")
+        else:
+            st.caption("이 책장으로 이동할 수 있어요")
+
+# 좌우 이동은 위치만 바꾸고, 선택을 다시 해야 한다.
 left, center, right = st.columns([1, 2, 1])
 with left:
-    if st.button("◀ 왼쪽", disabled=st.session_state.bm_pos == 0, use_container_width=True):
+    if st.button(
+        "◀ 왼쪽으로 이동",
+        disabled=st.session_state.bm_pos == 0,
+        use_container_width=True,
+    ):
         st.session_state.bm_pos -= 1
         st.session_state.bm_zone = None
         st.rerun()
+
 with center:
-    i = st.session_state.bm_pos
-    if st.button(f"🚪 {ZONES[i]} 책장 이용하기", type="primary", use_container_width=True):
-        st.session_state.bm_zone = i
+    position = st.session_state.bm_pos
+    already_selected = st.session_state.bm_zone == position
+    if st.button(
+        (f"✅ {ZONES[position]} 책장 선택 완료"
+         if already_selected
+         else f"🚪 {ZONES[position]} 책장 선택하기"),
+        type="secondary" if already_selected else "primary",
+        disabled=already_selected,
+        use_container_width=True,
+    ):
+        st.session_state.bm_zone = position
         st.rerun()
+
 with right:
-    if st.button("오른쪽 ▶", disabled=st.session_state.bm_pos == 2, use_container_width=True):
+    if st.button(
+        "오른쪽으로 이동 ▶",
+        disabled=st.session_state.bm_pos == 2,
+        use_container_width=True,
+    ):
         st.session_state.bm_pos += 1
         st.session_state.bm_zone = None
         st.rerun()
 
+# 선택된 책장과 책을 별도로 확인할 수 있는 고정 안내 영역.
+current_zone = st.session_state.bm_zone
+selected_book_key = st.session_state.bm_selected
+selected_book_info = st.session_state.bm_books.get(selected_book_key)
+
+st.markdown("#### 🎯 현재 나의 선택")
+with st.container(border=True):
+    status_zone, status_book = st.columns(2)
+    with status_zone:
+        st.markdown("**선택한 책장**")
+        if current_zone is not None:
+            st.success(f"✅ {EMOJIS[current_zone]} {ZONES[current_zone]} 책장")
+        else:
+            st.warning(
+                f"미선택 · 현재 위치: {ZONES[st.session_state.bm_pos]} 책장"
+            )
+    with status_book:
+        st.markdown("**선택한 책**")
+        if selected_book_info:
+            st.success(f"✅ {selected_book_info['title']}")
+        else:
+            st.warning("미선택 · 책을 등록하거나 골라 주세요")
+
+    if current_zone is not None and selected_book_info:
+        st.markdown(
+            f"**활동 준비 완료:** {selected_book_info['title']} → "
+            f"{ZONES[current_zone]} 활동"
+        )
+    elif current_zone is None:
+        st.caption(
+            "책장은 캐릭터가 있는 곳에서 '책장 선택하기'를 "
+            "눌러야 확정됩니다."
+        )
+    else:
+        st.caption("책장은 선택되었습니다. 이제 활동할 책을 골라 주세요.")
+
+# 기존 정보나루 검색/추천 기능을 그대로 유지한다.
 show_book_catalog()
 
 st.divider()
 st.subheader("📖 활동할 책 선택")
+st.caption(
+    "검색한 책을 등록하거나 직접 책 제목을 입력하세요. "
+    "등록 후 아래에서 현재 선택된 책을 확인할 수 있습니다."
+)
+
 with st.form("book_form", clear_on_submit=True):
     a, b = st.columns(2)
     title = a.text_input("책 제목 *", max_chars=100)
     author = b.text_input("저자", max_chars=70)
-    add_book = st.form_submit_button("이 책으로 활동하기")
+    add_book = st.form_submit_button("📚 책 등록하고 선택하기")
+
 if add_book:
     if not title.strip():
         st.warning("책 제목을 입력해 주세요.")
@@ -684,24 +780,55 @@ if add_book:
 books = st.session_state.bm_books
 if books:
     all_keys = list(books)
-    selected = st.selectbox("등록한 책", all_keys,
-                            index=all_keys.index(st.session_state.bm_selected)
-                            if st.session_state.bm_selected in all_keys else 0,
-                            format_func=lambda key: books[key]["title"])
+    selected = st.selectbox(
+        "내 도서관에 등록된 책",
+        all_keys,
+        index=(
+            all_keys.index(st.session_state.bm_selected)
+            if st.session_state.bm_selected in all_keys else 0
+        ),
+        format_func=lambda key: (
+            f"{books[key]['title']}"
+            + (f" · {books[key]['author']}" if books[key]['author'] else "")
+        ),
+    )
     if selected != st.session_state.bm_selected:
         st.session_state.bm_selected = selected
         st.session_state.bm_png = None
         st.rerun()
-else:
-    st.info("책 제목을 먼저 등록해 주세요.")
+
+    chosen = books.get(st.session_state.bm_selected)
+    if chosen:
+        st.success(f"✅ 현재 활동 도서 선택 완료: {chosen['title']}")
 
 selected_key = st.session_state.bm_selected
 book = books.get(selected_key)
 zone = st.session_state.bm_zone
-if zone is None:
-    st.info("캐릭터를 이동한 뒤 원하는 책장의 '이용하기'를 눌러 주세요.")
+
+st.divider()
+if zone is None and book is None:
+    st.info(
+        "아직 활동을 시작하지 않았습니다. "
+        "책장 위의 '책장 선택하기'를 누르고, "
+        "활동할 책을 등록해 주세요."
+    )
+elif zone is None:
+    st.info(
+        f"✅ '{book['title']}' 책은 선택되었습니다. "
+        "이제 위에서 원하는 책장을 선택해 주세요."
+    )
 elif book is None:
-    st.info("활동할 책을 먼저 등록해 주세요.")
+    st.info(
+        f"✅ {ZONES[zone]} 책장은 선택되었습니다. "
+        "활동할 책을 등록하거나 선택해 주세요."
+    )
+else:
+    st.success(
+        f"🎯 지금 이용 중: {ZONES[zone]} 책장 · {book['title']}"
+    )
+
+if zone is None or book is None:
+    pass  # 바로 위에서 미선택 상태를 한 번만 안내함.
 elif zone == 0:
     st.subheader(f"💬 한줄평 · {book['title']}")
     saved = st.session_state.bm_reviews.get(selected_key, {})
