@@ -39,6 +39,9 @@ PALETTES = {
     "크림": ("#FFF4E4", "#91644C", "#49372C"),
     "민트": ("#E2F4EC", "#3D8577", "#29473E"),
     "라벤더": ("#F1E9FA", "#7862A6", "#4C3D62"),
+    "밤하늘": ("#1C2B49", "#D9BB83", "#F6EDD6"),
+    "벚꽃": ("#FFF0F4", "#C47791", "#724359"),
+    "바다": ("#E7F4FA", "#3685A3", "#264D67"),
 }
 
 
@@ -46,6 +49,7 @@ def init_state():
     defaults = {
         "bm_pos": 0, "bm_zone": None, "bm_user_id": None,
         "bm_username": None, "bm_books": {}, "bm_selected": None,
+        "bm_library_books": {},
         "bm_reviews": {}, "bm_reports": {}, "bm_bookmarks": {},
         "bm_png": None, "bm_png_key": None,
         "bm_search_results": None, "bm_last_query": "",
@@ -94,6 +98,22 @@ def init_database():
                 quote TEXT NOT NULL, palette TEXT NOT NULL,
                 PRIMARY KEY(user_id, book_key)
             )""")
+            # 기존 기록을 유지하며 새 서재를 독립적으로 생성합니다.
+            db.execute("""CREATE TABLE IF NOT EXISTS library_books (
+                user_id INTEGER NOT NULL, book_key TEXT NOT NULL,
+                title TEXT NOT NULL, author TEXT NOT NULL,
+                publisher TEXT NOT NULL DEFAULT '',
+                image_url TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(user_id, book_key)
+            )""")
+            columns = {
+                row[1] for row in db.execute("PRAGMA table_info(bookmarks)")
+            }
+            if "design_json" not in columns:
+                db.execute(
+                    "ALTER TABLE bookmarks ADD COLUMN "
+                    "design_json TEXT NOT NULL DEFAULT '{}'"
+                )
         return True
     except (OSError, sqlite3.Error):
         return False
@@ -133,7 +153,7 @@ def authenticate(username, password):
 
 
 def reset_session():
-    for name in ("bm_books", "bm_reviews", "bm_reports", "bm_bookmarks"):
+    for name in ("bm_books", "bm_library_books", "bm_reviews", "bm_reports", "bm_bookmarks"):
         st.session_state[name] = {}
     st.session_state.bm_selected = None
     st.session_state.bm_png = None
@@ -152,13 +172,38 @@ def load_records(user_id):
             book_rows = db.execute("SELECT book_key,title,author FROM books WHERE user_id=?", (user_id,)).fetchall()
             review_rows = db.execute("SELECT book_key,rating,content FROM reviews WHERE user_id=?", (user_id,)).fetchall()
             report_rows = db.execute("SELECT book_key,reason,scene,thought FROM reports WHERE user_id=?", (user_id,)).fetchall()
-            bookmark_rows = db.execute("SELECT book_key,quote,palette FROM bookmarks WHERE user_id=?", (user_id,)).fetchall()
+            bookmark_rows = db.execute(
+                "SELECT book_key,quote,palette,design_json "
+                "FROM bookmarks WHERE user_id=?", (user_id,)
+            ).fetchall()
+            library_rows = db.execute(
+                "SELECT book_key,title,author,publisher,image_url "
+                "FROM library_books WHERE user_id=?", (user_id,)
+            ).fetchall()
     except (OSError, sqlite3.Error):
         return False
     st.session_state.bm_books = {k: {"title": t, "author": a} for k, t, a in book_rows}
     st.session_state.bm_reviews = {k: {"rating": r, "text": c} for k, r, c in review_rows}
     st.session_state.bm_reports = {k: {"reason": a, "scene": b, "thought": c} for k, a, b, c in report_rows}
-    st.session_state.bm_bookmarks = {k: {"quote": q, "palette": p} for k, q, p in bookmark_rows}
+    st.session_state.bm_bookmarks = {}
+    for key, quote, palette, design_json in bookmark_rows:
+        try:
+            options = json.loads(design_json or "{}")
+            if not isinstance(options, dict):
+                options = {}
+        except (ValueError, TypeError):
+            options = {}
+        st.session_state.bm_bookmarks[key] = {
+            "quote": quote, "palette": palette,
+            "layout": options.get("layout", "클래식 세로"),
+            "motif": options.get("motif", "별"),
+            "signature": options.get("signature", ""),
+        }
+    st.session_state.bm_library_books = {
+        k: {"title": title, "author": author,
+            "publisher": publisher, "image_url": image_url}
+        for k, title, author, publisher, image_url in library_rows
+    }
     st.session_state.bm_selected = next(iter(st.session_state.bm_books), None)
     st.session_state.bm_png = None
     st.session_state.bm_png_key = None
@@ -207,6 +252,78 @@ def delete_record(table, key):
     except (OSError, sqlite3.Error) as exc:
         st.error(f"기록을 삭제하지 못했습니다: {exc}")
         return False
+
+
+def choose_activity_book(book):
+    """검색 선택은 즉시 활동 도서로만 설정하며, 서재에는 추가하지 않습니다."""
+    title = str(book.get("title", "")).strip()
+    author = str(book.get("author", "")).strip()
+    if not title:
+        st.warning("책 제목을 확인해 주세요.")
+        return
+    key = record_id(title, author)
+    data = {"title": title, "author": author}
+    if save_record("bookmoa_books", data, key):
+        st.session_state.bm_books[key] = data
+        st.session_state.bm_selected = key
+        st.session_state.bm_png = None
+        st.session_state.bm_png_key = None
+        st.rerun()
+
+
+def save_library_book(book):
+    """독립 서재로 저장하며 현재 활동 도서는 변경하지 않습니다."""
+    title = str(book.get("title", "")).strip()
+    author = str(book.get("author", "")).strip()
+    if not title:
+        return False
+    key = record_id(title, author)
+    value = {
+        "title": title, "author": author,
+        "publisher": str(book.get("publisher", "")),
+        "image_url": str(book.get("image_url", "")),
+    }
+    uid = st.session_state.bm_user_id
+    if uid is not None:
+        try:
+            with db_connect() as db:
+                db.execute(
+                    "INSERT OR REPLACE INTO library_books "
+                    "(user_id,book_key,title,author,publisher,image_url) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (uid, key, value["title"], value["author"],
+                     value["publisher"], value["image_url"]),
+                )
+        except (sqlite3.Error, OSError):
+            st.error("나의 서재에 저장하지 못했습니다.")
+            return False
+    st.session_state.bm_library_books[key] = value
+    st.rerun()
+
+
+def save_bookmark_design(key, quote, palette, layout, motif, signature):
+    """기존 bookmarks 테이블에 디자인 옵션만 추가로 보관합니다."""
+    uid = st.session_state.bm_user_id
+    if uid is not None:
+        options = json.dumps(
+            {"layout": layout, "motif": motif, "signature": signature},
+            ensure_ascii=False,
+        )
+        try:
+            with db_connect() as db:
+                db.execute(
+                    "INSERT OR REPLACE INTO bookmarks "
+                    "(user_id,book_key,quote,palette,design_json) "
+                    "VALUES(?,?,?,?,?)", (uid, key, quote, palette, options)
+                )
+        except (sqlite3.Error, OSError):
+            st.error("책갈피를 저장하지 못했습니다.")
+            return False
+    st.session_state.bm_bookmarks[key] = {
+        "quote": quote, "palette": palette, "layout": layout,
+        "motif": motif, "signature": signature,
+    }
+    return True
 
 
 # ── 그림 ──
@@ -302,28 +419,95 @@ def word_lines(draw, text, font, max_width):
     return result
 
 
-def make_bookmark(title, author, quote, palette):
+def draw_motif(draw, motif, cx, cy, color, scale=1.0):
+    """한글 글꼴만으로 표시 가능한 심플 도형 장식."""
+    r = int(27 * scale)
+    if motif == "별":
+        import math
+        points = []
+        for i in range(10):
+            rad = (i * 36 - 90) * math.pi / 180
+            size = r if i % 2 == 0 else r * 0.45
+            points.append((cx + size * math.cos(rad),
+                           cy + size * math.sin(rad)))
+        draw.polygon(points, fill=color)
+    elif motif == "달":
+        draw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=color)
+        # 원호를 이용해 밝기 차이와 관계 없이 형태를 유지합니다.
+        draw.arc((cx-r*0.15, cy-r, cx+r*1.3, cy+r),
+                 75, 285, fill=color, width=4)
+    elif motif == "꽃":
+        for dx, dy in ((-r//2,0),(r//2,0),(0,-r//2),(0,r//2)):
+            draw.ellipse((cx+dx-r//2,cy+dy-r//2,
+                          cx+dx+r//2,cy+dy+r//2), fill=color)
+        draw.ellipse((cx-r//3,cy-r//3,cx+r//3,cy+r//3),fill="#FFF7EB")
+    else:  # 책
+        draw.rounded_rectangle((cx-r,cy-r//2,cx,cy+r//2),
+                               radius=5, outline=color, width=4)
+        draw.rounded_rectangle((cx,cy-r//2,cx+r,cy+r//2),
+                               radius=5, outline=color, width=4)
+        draw.line((cx,cy-r//2,cx,cy+r//2), fill=color,width=3)
+
+
+def make_bookmark(title, author, quote, palette,
+                  layout="클래식 세로", motif="별", signature=""):
+    """세 가지 레이아웃의 고해상도 책갈피를 생성합니다."""
+    if layout == "가로 문장 카드":
+        w, h = 1000, 600
+    elif layout == "미니 책갈피":
+        w, h = 520, 850
+    else:
+        w, h = 640, 1060
     bg, accent, ink = PALETTES[palette]
-    image = Image.new("RGB", (560, 920), bg)
+    image = Image.new("RGB", (w,h), bg)
     d = ImageDraw.Draw(image)
-    d.rounded_rectangle((23, 23, 537, 897), radius=25, outline=accent, width=5)
-    title_font, sub_font, body_font = ko_font(35), ko_font(22), ko_font(29)
-    d.text((180, 82), "MY BOOKMARK", font=sub_font, fill=accent)
-    d.line((80, 141, 480, 141), fill=accent, width=3)
-    for i, line in enumerate(word_lines(d, title, title_font, 430)[:3]):
-        d.text((65, 180 + i * 52), line, font=title_font, fill=ink)
-    for i, line in enumerate(word_lines(d, author, sub_font, 430)[:2]):
-        d.text((65, 365 + i * 34), line, font=sub_font, fill=accent)
-    lines = word_lines(d, quote, body_font, 430)
-    if len(lines) > 8:
-        raise ValueError("책갈피 문장을 조금 짧게 작성해 주세요.")
-    start = 505 - len(lines) * 24
-    for i, line in enumerate(lines):
-        d.text((65, start + i * 50), line, font=body_font, fill=ink)
-    d.line((80, 788, 480, 788), fill=accent, width=3)
-    d.text((178, 826), "책모아 도서관", font=sub_font, fill=accent)
+    pad = int(w*0.06)
+    d.rounded_rectangle((pad,pad,w-pad,h-pad), radius=24,
+                        outline=accent, width=5)
+    d.rounded_rectangle((pad+12,pad+12,w-pad-12,h-pad-12),
+                        radius=20, outline=accent, width=1)
+    cx = w//2
+    draw_motif(d, motif, cx, int(h*0.16), accent, 1.2)
+    label_font = ko_font(21 if w < 700 else 24)
+    title_font = ko_font(29 if w < 700 else 34)
+    d.text((cx,int(h*0.25)), "책 속의 한 문장", font=label_font,
+           fill=accent, anchor="mm")
+    # 제목과 저자는 영역을 초과하지 않도록 적절히 줄바꿈합니다.
+    titles = word_lines(d, title, title_font, w-2*pad-60)[:2]
+    for i, line in enumerate(titles):
+        d.text((cx,int(h*0.32)+i*35),line,font=title_font,
+               fill=ink,anchor="mm")
+    if author:
+        author_y = int(h*0.41) if layout != "가로 문장 카드" else int(h*0.43)
+        d.text((cx,author_y),author[:36],font=label_font,
+               fill=accent,anchor="mm")
+    # 문장 크기는 줄 수와 너비를 기준으로 자동 조절합니다.
+    area_top = int(h*(0.44 if layout == "가로 문장 카드" else 0.48))
+    area_bottom = int(h*(0.73 if layout == "가로 문장 카드" else 0.79))
+    for fontsize in (42,38,34,30,27,24,21,18):
+        f = ko_font(fontsize)
+        lines = word_lines(d, quote.strip(), f, w-2*pad-80)
+        line_h = int(fontsize*1.5)
+        if len(lines)*line_h <= area_bottom-area_top:
+            break
+    else:
+        raise ValueError("문장이 너무 길어요. 조금 줄여주세요.")
+    if not lines:
+        raise ValueError("책갈피에 넣을 문장을 입력해 주세요.")
+    line_h = int(fontsize*1.5)
+    first_y = (area_top+area_bottom-len(lines)*line_h)//2+line_h//2
+    for i,line in enumerate(lines):
+        d.text((cx,first_y+i*line_h),line,font=f,
+               fill=ink,anchor="mm")
+    divider_y = int(h*(0.78 if layout == "가로 문장 카드" else 0.85))
+    d.line((int(w*0.24),divider_y,int(w*0.76),divider_y),
+           fill=accent,width=3)
+    footer = signature.strip()[:30] or "책모아 도서관"
+    d.text((cx,int(h*(0.835 if layout == "가로 문장 카드" else 0.91))),
+           footer, font=label_font,
+           fill=accent,anchor="mm")
     out = BytesIO()
-    image.save(out, format="PNG")
+    image.save(out,"PNG")
     return out.getvalue()
 
 
@@ -519,62 +703,54 @@ def find_popular_books(api_key):
     return books, (start.isoformat(), end.isoformat())
 
 
-def register_api_book(book):
-    """검색 또는 추천한 도서를 기존 책장 데이터에 연결한다."""
-    title = book.get("title", "").strip()
-    author = book.get("author", "").strip()
-    if not title:
-        st.warning("제목이 없는 도서는 등록할 수 없습니다.")
-        return
-    key = record_id(title, author)
-    data = {"title": title, "author": author}
-    if save_record("bookmoa_books", data, key):
-        st.session_state.bm_books[key] = data
-        st.session_state.bm_selected = key
-        st.session_state.bm_png = None
-        # 도서를 등록해도 책장을 자동 선택하지 않는다.
-        # 이용할 책장은 사용자가 직접 확정하도록 한다.
-        st.rerun()
-
-
 def display_catalog_books(books, prefix, columns=3):
+    """검색에서 책을 선택하면 바로 활동 도서, 서재 저장은 별개."""
     if not books:
-        st.info("조건에 맞는 도서를 찾지 못했습니다. 다른 검색어를 사용해 보세요.")
+        st.info("검색 결과가 없습니다. 다른 키워드로 검색하거나 직접 입력하세요.")
         return
-    for i in range(0, len(books), columns):
-        group = st.columns(columns)
-        for j, book in enumerate(books[i:i + columns]):
+    library = st.session_state.bm_library_books
+    for i in range(0,len(books),columns):
+        group = st.columns(columns, gap="small")
+        for j, book in enumerate(books[i:i+columns]):
+            index = i+j
+            key = record_id(book["title"],book.get("author", ""))
+            selected = st.session_state.bm_selected == key
             with group[j]:
                 with st.container(border=True):
-                    image_url = book.get("image_url", "")
+                    image_url = book.get("image_url","")
                     if image_url:
                         try:
-                            st.image(image_url, width=108)
+                            st.image(image_url, width=100)
                         except Exception:
-                            st.caption("표지 이미지 없음")
+                            st.caption("📖 표지 없음")
                     else:
-                        st.caption("📖 표지 정보 없음")
-                    st.write(book["title"])
-                    if book.get("author"):
-                        st.caption("저자: " + book["author"])
-                    if book.get("publisher"):
-                        st.caption("출판사: " + book["publisher"])
+                        st.caption("📖 표지 없음")
+                    st.markdown("**"+book["title"]+"**")
+                    details = " · ".join(
+                        x for x in (book.get("author",""),
+                                    book.get("publisher","")) if x
+                    )
+                    if details:
+                        st.caption(details)
                     if prefix == "popular":
-                        rank = book.get("ranking") or str(i + j + 1)
-                        count = book.get("loan_count")
-                        st.caption(f"대출 순위 {rank}위" +
-                                   (f" · 대출 {count}회" if count else ""))
+                        st.caption(f"대출 순위 {book.get('ranking') or index+1}위")
                     if st.button(
-                        "➕ 내 도서관에 등록",
-                        key=f"bm_api_add_{prefix}_{i+j}",
-                        use_container_width=True,
+                        "✅ 활동 도서 선택됨" if selected else "📖 이 책으로 활동",
+                        key=f"choose_{prefix}_{index}",
+                        disabled=selected, use_container_width=True,
+                        type="secondary" if selected else "primary",
                     ):
-                        register_api_book(book)
+                        choose_activity_book(book)
+                    if st.button(
+                        "✅ 서재에 담김" if key in library else "＋ 나의 서재에 담기",
+                        key=f"keep_{prefix}_{index}",
+                        disabled=key in library, use_container_width=True,
+                    ):
+                        save_library_book(book)
 
 
 def show_book_catalog():
-    st.divider()
-    st.subheader("🔎 책 검색과 인기 도서 추천")
+    st.markdown("#### 🔎 책 검색과 인기 도서 추천")
     st.caption("도서관 정보나루의 실제 도서·대출 정보를 활용합니다.")
 
     api_key = api_key_from_secrets()
@@ -636,58 +812,34 @@ def show_book_catalog():
             )
 
 
-# ── 페이지 / 로그인 ──
+# ---------------------------------------------------------
+# 메인 화면: 책을 먼저 고르고, 활동은 한 번의 클릭으로 시작합니다.
+# ---------------------------------------------------------
 init_state()
-st.title("📚 책모아 도서관")
-st.caption("책장 사이를 이동하며 한줄평·독후감·책갈피를 만들어 보세요.")
 db_ready = init_database()
 
 with st.sidebar:
     st.title("📚 책모아")
-    st.markdown("#### 페이지 이동")
-    st.page_link("main.py", label="🏠 MAIN · 도서관")
-    page_candidates = sorted((ROOT / "pages").glob("*.py"))
-    def norm(name):
-        return unicodedata.normalize("NFC", name).casefold()
-    shortform = next((p for p in page_candidates if
-                      "숏폼" in norm(p.name) or "shortform" in norm(p.name)), None)
-    if shortform is None:
-        shortform = next((p for p in page_candidates if norm(p.stem).startswith("1_")), None)
-    if shortform is None and len(page_candidates) == 1:
-        shortform = page_candidates[0]
-    if shortform is not None:
-        try:
-            st.page_link(f"pages/{shortform.name}", label="🎮 PAGE 1 · 숏폼 브레이커")
-        except Exception:
-            st.caption("PAGE 1 파일 이름과 페이지 등록 상태를 확인해 주세요.")
-    else:
-        st.caption("PAGE 1은 pages 폴더에 파일을 넣으면 나타납니다.")
-
-    # PAGE 2가 생성되면 메인 사이드바에 자동 표시합니다.
-    focus_room = next(
-        (p for p in page_candidates if
-         "집중실" in norm(p.name) or norm(p.stem).startswith("2_")),
-        None
-    )
-    if focus_room is not None and focus_room != shortform:
-        try:
-            st.page_link(
-                f"pages/{focus_room.name}",
-                label="⏱️ PAGE 2 · 독서 집중실"
-            )
-        except Exception:
-            st.caption("PAGE 2 파일 경로를 확인해 주세요.")
-
+    st.markdown("#### 이동하기")
+    st.page_link("main.py", label="🏠 도서관", use_container_width=True)
+    links = [
+        ("pages/0_나의_서재.py", "📚 나의 서재"),
+        ("pages/1_독서_집중실.py", "⏱️ 독서 집중실"),
+        ("pages/2_숏폼_브레이커.py", "🎮 숏폼 브레이커"),
+    ]
+    for path, label in links:
+        if (ROOT / path).is_file():
+            st.page_link(path, label=label, use_container_width=True)
     st.divider()
-    st.markdown("#### 👤 내 독서 기록")
+    st.markdown("#### 👤 내 계정")
     if not db_ready:
-        st.warning("로그인 저장소를 사용할 수 없습니다. 현재는 체험만 가능합니다.")
+        st.warning("로그인 저장소에 연결하지 못했습니다. 현재는 체험만 가능합니다.")
     elif st.session_state.bm_user_id is None:
         t_login, t_signup = st.tabs(["로그인", "회원가입"])
         with t_login:
             with st.form("login_form"):
-                username = st.text_input("아이디", key="login_username")
-                password = st.text_input("비밀번호", type="password", key="login_password")
+                username = st.text_input("아이디",key="login_username")
+                password = st.text_input("비밀번호",type="password",key="login_password")
                 submitted = st.form_submit_button("로그인")
             if submitted:
                 uid = authenticate(username.strip(), password)
@@ -701,288 +853,215 @@ with st.sidebar:
                     st.error("계정 기록을 불러올 수 없습니다.")
         with t_signup:
             with st.form("signup_form"):
-                new_username = st.text_input("새 아이디", key="signup_username")
-                new_password = st.text_input("새 비밀번호 (8자 이상)", type="password", key="signup_password")
-                confirm = st.text_input("비밀번호 확인", type="password", key="signup_confirm")
+                new_username = st.text_input("새 아이디",key="signup_username")
+                new_password = st.text_input("새 비밀번호 (8자 이상)",type="password",key="signup_password")
+                confirm = st.text_input("비밀번호 확인",type="password",key="signup_confirm")
                 submitted_new = st.form_submit_button("회원가입")
             if submitted_new:
                 if new_password != confirm:
                     st.error("비밀번호가 일치하지 않습니다.")
                 else:
-                    result = register_user(new_username.strip(), new_password)
-                    if result:
-                        st.error(result)
+                    error = register_user(new_username.strip(), new_password)
+                    if error:
+                        st.error(error)
                     else:
                         st.success("가입되었습니다. 로그인 탭에서 로그인해 주세요.")
     else:
         st.success(f"{st.session_state.bm_username}님 로그인 중")
-        if st.button("로그아웃", use_container_width=True):
+        if st.button("로그아웃",use_container_width=True):
             reset_session()
             st.rerun()
-    st.caption("로컬 저장 방식입니다. Streamlit Cloud 재시작·재배포 후에는 계정과 기록이 사라질 수 있습니다.")
+    st.caption("로컬 SQLite는 서버 재시작·재배포 시 기록 유지가 보장되지 않습니다.")
+
+st.title("📚 책모아 도서관")
+st.caption("책을 선택하고 한줄평·독후감·책갈피 중 원하는 활동을 바로 시작하세요.")
+
+# 첫 화면에서 지금 활동할 책을 항상 명확히 표시합니다.
+current_key = st.session_state.bm_selected
+current_book = st.session_state.bm_books.get(current_key)
+if current_book:
+    status_col, library_col = st.columns([3, 1])
+    with status_col:
+        text = f"📖 지금 활동할 책: **{current_book['title']}**"
+        if current_book.get("author"):
+            text += f" · {current_book['author']}"
+        st.success(text)
+    with library_col:
+        in_library = current_key in st.session_state.bm_library_books
+        if st.button(
+            "✅ 서재에 있음" if in_library else "＋ 서재에 담기",
+            disabled=in_library,
+            use_container_width=True,
+            key="bm_save_active_to_library",
+        ):
+            save_library_book(current_book)
+else:
+    st.info("아직 활동할 책이 없습니다. 아래에서 검색하거나 책 제목을 입력하세요.")
+
+# 책장 이동 과정 없이 바로 활동을 선택할 수 있습니다.
+st.markdown("### ① 활동할 책 고르기")
+with st.expander("🔎 책 검색·인기 도서·직접 입력", expanded=not current_book):
+    show_book_catalog()
+    st.markdown("#### ✏️ 검색되지 않는 책은 직접 입력")
+    with st.form("manual_activity_book",clear_on_submit=True):
+        ca,cb = st.columns([2,1])
+        title = ca.text_input("책 제목 *",max_chars=100)
+        author = cb.text_input("저자 (선택)",max_chars=70)
+        submitted = st.form_submit_button("📖 이 책으로 바로 활동",type="primary")
+    if submitted:
+        if not title.strip():
+            st.warning("책 제목을 입력해 주세요.")
+        else:
+            choose_activity_book({"title":title,"author":author})
+
+    if st.session_state.bm_books:
+        st.markdown("#### 🕘 이전에 활동한 책")
+        keys = list(st.session_state.bm_books)
+        chosen = st.selectbox("기존 활동 도서",keys,
+            format_func=lambda k: st.session_state.bm_books[k]["title"],
+            index=keys.index(st.session_state.bm_selected)
+                  if st.session_state.bm_selected in keys else 0)
+        if st.button("선택한 책으로 활동",key="bm_resume_activity"):
+            st.session_state.bm_selected = chosen
+            st.rerun()
 
 
-st.subheader("🏛️ 도서관 둘러보기")
-st.caption(
-    "① 캐릭터를 책장 앞으로 이동 → ② '책장 선택하기' 클릭 → "
-    "③ 활동할 책 선택의 순서로 진행하세요."
-)
-
+st.markdown("### ② 원하는 활동 바로 시작")
 cols = st.columns(3, gap="small")
 for i, col in enumerate(cols):
     with col:
-        st.markdown(f"#### {EMOJIS[i]} {ZONES[i]} 책장")
-        st.image(
-            shelf_image(
-                i,
-                character_here=(i == st.session_state.bm_pos),
-                zone_selected=(i == st.session_state.bm_zone),
-            ),
-            use_container_width=True,
-        )
-
-        if i == st.session_state.bm_zone:
-            st.success("✅ 선택 완료 · 이용 중")
-        elif i == st.session_state.bm_pos:
-            st.info("📍 캐릭터 도착 · 아직 선택 전")
-        else:
-            st.caption("이 책장으로 이동할 수 있어요")
-
-# 좌우 이동은 위치만 바꾸고, 선택을 다시 해야 한다.
-left, center, right = st.columns([1, 2, 1])
-with left:
-    if st.button(
-        "◀ 왼쪽으로 이동",
-        disabled=st.session_state.bm_pos == 0,
-        use_container_width=True,
-    ):
-        st.session_state.bm_pos -= 1
-        st.session_state.bm_zone = None
-        st.rerun()
-
-with center:
-    position = st.session_state.bm_pos
-    already_selected = st.session_state.bm_zone == position
-    if st.button(
-        (f"✅ {ZONES[position]} 책장 선택 완료"
-         if already_selected
-         else f"🚪 {ZONES[position]} 책장 선택하기"),
-        type="secondary" if already_selected else "primary",
-        disabled=already_selected,
-        use_container_width=True,
-    ):
-        st.session_state.bm_zone = position
-        st.rerun()
-
-with right:
-    if st.button(
-        "오른쪽으로 이동 ▶",
-        disabled=st.session_state.bm_pos == 2,
-        use_container_width=True,
-    ):
-        st.session_state.bm_pos += 1
-        st.session_state.bm_zone = None
-        st.rerun()
-
-# 선택된 책장과 책을 별도로 확인할 수 있는 고정 안내 영역.
-current_zone = st.session_state.bm_zone
-selected_book_key = st.session_state.bm_selected
-selected_book_info = st.session_state.bm_books.get(selected_book_key)
-
-st.markdown("#### 🎯 현재 나의 선택")
-with st.container(border=True):
-    status_zone, status_book = st.columns(2)
-    with status_zone:
-        st.markdown("**선택한 책장**")
-        if current_zone is not None:
-            st.success(f"✅ {EMOJIS[current_zone]} {ZONES[current_zone]} 책장")
-        else:
-            st.warning(
-                f"미선택 · 현재 위치: {ZONES[st.session_state.bm_pos]} 책장"
+        with st.container(border=True):
+            st.markdown(f"**{EMOJIS[i]} {ZONES[i]}**")
+            st.image(
+                shelf_image(i, character_here=(st.session_state.bm_zone==i),
+                            zone_selected=(st.session_state.bm_zone==i)),
+                width=190,
             )
-    with status_book:
-        st.markdown("**선택한 책**")
-        if selected_book_info:
-            st.success(f"✅ {selected_book_info['title']}")
-        else:
-            st.warning("미선택 · 책을 등록하거나 골라 주세요")
+            is_selected = st.session_state.bm_zone == i
+            if st.button(
+                f"✅ {ZONES[i]} 선택됨" if is_selected else f"{ZONES[i]} 시작하기",
+                key=f"bm_direct_zone_{i}", use_container_width=True,
+                disabled=is_selected,
+                type="secondary" if is_selected else "primary",
+            ):
+                st.session_state.bm_zone = i
+                st.rerun()
 
-    if current_zone is not None and selected_book_info:
-        st.markdown(
-            f"**활동 준비 완료:** {selected_book_info['title']} → "
-            f"{ZONES[current_zone]} 활동"
-        )
-    elif current_zone is None:
-        st.caption(
-            "책장은 캐릭터가 있는 곳에서 '책장 선택하기'를 "
-            "눌러야 확정됩니다."
-        )
-    else:
-        st.caption("책장은 선택되었습니다. 이제 활동할 책을 골라 주세요.")
+if not current_book:
+    st.caption("활동 종류는 미리 선택할 수 있습니다. 책을 고르면 곧바로 작성할 수 있어요.")
 
-# 기존 정보나루 검색/추천 기능을 그대로 유지한다.
-show_book_catalog()
-
-st.divider()
-st.subheader("📖 활동할 책 선택")
-st.caption(
-    "검색한 책을 등록하거나 직접 책 제목을 입력하세요. "
-    "등록 후 아래에서 현재 선택된 책을 확인할 수 있습니다."
-)
-
-with st.form("book_form", clear_on_submit=True):
-    a, b = st.columns(2)
-    title = a.text_input("책 제목 *", max_chars=100)
-    author = b.text_input("저자", max_chars=70)
-    add_book = st.form_submit_button("📚 책 등록하고 선택하기")
-
-if add_book:
-    if not title.strip():
-        st.warning("책 제목을 입력해 주세요.")
-    else:
-        k = record_id(title, author)
-        data = {"title": title.strip(), "author": author.strip()}
-        if save_record("bookmoa_books", data, k):
-            st.session_state.bm_books[k] = data
-            st.session_state.bm_selected = k
-            st.session_state.bm_png = None
-            st.rerun()
-
-books = st.session_state.bm_books
-if books:
-    all_keys = list(books)
-    selected = st.selectbox(
-        "내 도서관에 등록된 책",
-        all_keys,
-        index=(
-            all_keys.index(st.session_state.bm_selected)
-            if st.session_state.bm_selected in all_keys else 0
-        ),
-        format_func=lambda key: (
-            f"{books[key]['title']}"
-            + (f" · {books[key]['author']}" if books[key]['author'] else "")
-        ),
-    )
-    if selected != st.session_state.bm_selected:
-        st.session_state.bm_selected = selected
-        st.session_state.bm_png = None
-        st.rerun()
-
-    chosen = books.get(st.session_state.bm_selected)
-    if chosen:
-        st.success(f"✅ 현재 활동 도서 선택 완료: {chosen['title']}")
-
-selected_key = st.session_state.bm_selected
-book = books.get(selected_key)
+# 선택한 활동 영역을 활동 카드 바로 아래에 표시합니다.
 zone = st.session_state.bm_zone
-
-st.divider()
-if zone is None and book is None:
-    st.info(
-        "아직 활동을 시작하지 않았습니다. "
-        "책장 위의 '책장 선택하기'를 누르고, "
-        "활동할 책을 등록해 주세요."
-    )
-elif zone is None:
-    st.info(
-        f"✅ '{book['title']}' 책은 선택되었습니다. "
-        "이제 위에서 원하는 책장을 선택해 주세요."
-    )
-elif book is None:
-    st.info(
-        f"✅ {ZONES[zone]} 책장은 선택되었습니다. "
-        "활동할 책을 등록하거나 선택해 주세요."
-    )
-else:
-    st.success(
-        f"🎯 지금 이용 중: {ZONES[zone]} 책장 · {book['title']}"
-    )
-
-if zone is None or book is None:
-    pass  # 바로 위에서 미선택 상태를 한 번만 안내함.
-elif zone == 0:
-    st.subheader(f"💬 한줄평 · {book['title']}")
-    saved = st.session_state.bm_reviews.get(selected_key, {})
-    with st.form(f"review_{selected_key}"):
-        rating = st.slider("별점", 1, 5, saved.get("rating", 3))
-        content = st.text_area("한줄평 (10~100자)", value=saved.get("text", ""), max_chars=100)
-        save = st.form_submit_button("한줄평 저장")
-    if save:
-        if len(content.strip()) < 10:
-            st.warning("10자 이상 작성해 주세요.")
-        elif save_record("bookmoa_reviews", {"rating": rating, "content": content.strip()}, selected_key):
-            st.session_state.bm_reviews[selected_key] = {"rating": rating, "text": content.strip()}
-            st.rerun()
-    if saved:
-        st.success("⭐" * saved["rating"] + "  " + saved["text"])
-        if st.button("한줄평 삭제") and delete_record("bookmoa_reviews", selected_key):
-            st.session_state.bm_reviews.pop(selected_key, None)
-            st.rerun()
-elif zone == 1:
-    st.subheader(f"📝 독후감 · {book['title']}")
-    saved = st.session_state.bm_reports.get(selected_key, {})
-    with st.form(f"report_{selected_key}"):
-        reason = st.text_area("1. 책을 읽게 된 이유", value=saved.get("reason", ""))
-        scene = st.text_area("2. 가장 인상 깊었던 내용", value=saved.get("scene", ""))
-        thought = st.text_area("3. 읽고 난 뒤의 생각", value=saved.get("thought", ""))
-        save = st.form_submit_button("독후감 저장")
-    if save:
-        if not all(part.strip() for part in (reason, scene, thought)):
-            st.warning("세 항목을 모두 작성해 주세요.")
-        elif save_record("bookmoa_reports", {"reason": reason.strip(), "scene": scene.strip(), "thought": thought.strip()}, selected_key):
-            st.session_state.bm_reports[selected_key] = {"reason": reason.strip(), "scene": scene.strip(), "thought": thought.strip()}
-            st.rerun()
-    if saved:
-        full = (f"[{book['title']}] 독후감\n\n1. 읽게 된 이유\n{saved['reason']}\n\n"
-                f"2. 인상 깊었던 내용\n{saved['scene']}\n\n3. 읽고 난 뒤의 생각\n{saved['thought']}")
-        st.text_area("독후감 미리보기", value=full, height=250, disabled=True)
-        st.download_button("📥 독후감 TXT 다운로드", full.encode("utf-8-sig"),
-                           file_name="bookmoa_report.txt", mime="text/plain")
-        if st.button("독후감 삭제") and delete_record("bookmoa_reports", selected_key):
-            st.session_state.bm_reports.pop(selected_key, None)
-            st.rerun()
-elif zone == 2:
-    st.subheader(f"🔖 책갈피 만들기 · {book['title']}")
-    saved_bookmark = st.session_state.bm_bookmarks.get(selected_key, {})
-    default_text = saved_bookmark.get("quote") or st.session_state.bm_reviews.get(selected_key, {}).get("text", "")
-    quote = st.text_area("책갈피 문장", value=default_text, max_chars=100, key=f"quote_{selected_key}")
-    themes = list(PALETTES)
-    saved_palette = saved_bookmark.get("palette", "크림")
-    theme = st.selectbox("책갈피 디자인", themes,
-                        index=themes.index(saved_palette) if saved_palette in themes else 0,
-                        key=f"palette_{selected_key}")
-    if st.button("책갈피 이미지 만들기", type="primary"):
-        if not quote.strip():
-            st.warning("책갈피 문장을 입력해 주세요.")
-        else:
-            try:
-                png = make_bookmark(book["title"], book["author"], quote.strip(), theme)
-                if save_record("bookmoa_bookmarks", {"quote": quote.strip(), "palette": theme}, selected_key):
-                    st.session_state.bm_bookmarks[selected_key] = {"quote": quote.strip(), "palette": theme}
-                    st.session_state.bm_png = png
-                    st.session_state.bm_png_key = selected_key
+if current_book and zone is not None:
+    st.markdown(f"### ✍️ {current_book['title']} · {ZONES[zone]}")
+    key = current_key
+    book = current_book
+    if zone == 0:
+        saved = st.session_state.bm_reviews.get(key,{})
+        with st.form(f"review_{key}"):
+            rating = st.slider("별점",1,5,int(saved.get("rating",3)))
+            content = st.text_area("나의 한줄평",value=saved.get("text",""),max_chars=150,
+                                   placeholder="책을 읽고 어떤 생각이 들었나요?")
+            submitted = st.form_submit_button("💾 한줄평 저장",type="primary")
+        if submitted:
+            if len(content.strip()) < 5:
+                st.warning("한줄평을 5자 이상 적어 주세요.")
+            elif save_record("bookmoa_reviews",{"rating":rating,"content":content.strip()},key):
+                st.session_state.bm_reviews[key] = {"rating":rating,"text":content.strip()}
+                st.rerun()
+        if saved:
+            st.success(f"{'⭐'*saved['rating']}  {saved['text']}")
+            if st.button("한줄평 삭제",key=f"delete_review_{key}"):
+                if delete_record("bookmoa_reviews",key):
+                    st.session_state.bm_reviews.pop(key,None)
                     st.rerun()
-            except (ValueError, RuntimeError) as exc:
-                st.error(str(exc))
-    if st.session_state.bm_png and st.session_state.bm_png_key == selected_key:
-        st.image(st.session_state.bm_png, width=260)
-        st.download_button("📥 책갈피 PNG 다운로드", st.session_state.bm_png,
-                           file_name="bookmoa_bookmark.png", mime="image/png")
+
+    elif zone == 1:
+        saved = st.session_state.bm_reports.get(key,{})
+        with st.form(f"report_{key}"):
+            reason = st.text_area("1. 이 책을 읽게 된 이유",value=saved.get("reason",""))
+            scene = st.text_area("2. 기억에 남는 장면이나 내용",value=saved.get("scene",""))
+            thought = st.text_area("3. 읽은 뒤의 생각과 배운 점",value=saved.get("thought",""))
+            submitted = st.form_submit_button("💾 독후감 저장",type="primary")
+        if submitted:
+            if not all(x.strip() for x in (reason,scene,thought)):
+                st.warning("세 항목을 모두 작성해 주세요.")
+            elif save_record("bookmoa_reports",{
+                "reason":reason.strip(),"scene":scene.strip(),"thought":thought.strip()
+            },key):
+                st.session_state.bm_reports[key] = {
+                    "reason":reason.strip(),"scene":scene.strip(),"thought":thought.strip()
+                }
+                st.rerun()
+        if saved:
+            output = (f"[{book['title']}] 독후감\n\n"
+                      f"1. 읽게 된 이유\n{saved['reason']}\n\n"
+                      f"2. 기억에 남는 내용\n{saved['scene']}\n\n"
+                      f"3. 읽고 난 생각\n{saved['thought']}")
+            st.download_button("📥 독후감 TXT 다운로드",output.encode("utf-8-sig"),
+                               file_name="bookmoa_report.txt",mime="text/plain")
+            if st.button("독후감 삭제",key=f"delete_report_{key}"):
+                if delete_record("bookmoa_reports",key):
+                    st.session_state.bm_reports.pop(key,None)
+                    st.rerun()
+
+    else:
+        saved = st.session_state.bm_bookmarks.get(key,{})
+        default_quote = saved.get("quote") or st.session_state.bm_reviews.get(key,{}).get("text","")
+        st.caption("문장·디자인·장식을 골라 나만의 책갈피를 만들고 PNG로 저장하세요.")
+        quote = st.text_area("책갈피에 넣을 문장",value=default_quote,
+                             max_chars=200,key=f"bm_q_{key}",
+                             placeholder="기억하고 싶은 문장이나 직접 쓴 감상을 입력하세요")
+        cols = st.columns(3)
+        layouts = ["클래식 세로","미니 책갈피","가로 문장 카드"]
+        motifs = ["별","달","꽃","책"]
+        palettes = list(PALETTES)
+        def idx(options,value):
+            return options.index(value) if value in options else 0
+        with cols[0]:
+            palette = st.selectbox("배경 색상",palettes,
+                                   index=idx(palettes,saved.get("palette","크림")),
+                                   key=f"bm_pal_{key}")
+        with cols[1]:
+            layout = st.selectbox("책갈피 크기",layouts,
+                                  index=idx(layouts,saved.get("layout","클래식 세로")),
+                                  key=f"bm_layout_{key}")
+        with cols[2]:
+            motif = st.selectbox("장식",motifs,
+                                 index=idx(motifs,saved.get("motif","별")),
+                                 key=f"bm_motif_{key}")
+        signature = st.text_input("하단에 넣을 이름 또는 문구 (선택)",
+                                  value=saved.get("signature",""),max_chars=30,
+                                  key=f"bm_sign_{key}")
+        if quote.strip():
+            try:
+                png = make_bookmark(book["title"],book.get("author",""),quote,
+                                    palette,layout,motif,signature)
+            except (ValueError,RuntimeError) as exc:
+                st.warning(str(exc))
+                png = None
+            if png:
+                with st.container(border=True):
+                    st.markdown("**🖼️ 미리보기**")
+                    st.image(png,width=350)
+                b1,b2 = st.columns(2)
+                with b1:
+                    if st.button("💾 내 책갈피 저장",type="primary",use_container_width=True):
+                        if save_bookmark_design(key,quote.strip(),palette,layout,motif,signature):
+                            st.success("책갈피의 문장과 디자인을 저장했어요.")
+                with b2:
+                    st.download_button("📥 PNG 다운로드",png,
+                                       file_name="bookmoa_bookmark.png",mime="image/png",
+                                       use_container_width=True)
+        else:
+            st.info("문장을 입력하면 책갈피 미리보기가 나타납니다.")
+else:
+    if zone is None:
+        st.caption("위의 세 활동 가운데 원하는 것을 누르세요.")
+    elif current_book is None:
+        st.caption("아래에서 책을 선택하면 작성 화면이 열립니다.")
 
 st.divider()
-with st.expander("📒 내 독서 기록 보기"):
-    if not books:
-        st.write("등록된 책이 없습니다.")
-    for k, data in books.items():
-        st.markdown(f"**📖 {data['title']}**")
-        review = st.session_state.bm_reviews.get(k)
-        if review:
-            st.write("⭐" * review["rating"], review["text"])
-        if k in st.session_state.bm_reports:
-            st.write("📝 독후감 작성 완료")
-        if k in st.session_state.bm_bookmarks:
-            st.write("🔖 책갈피 문장 및 디자인 저장 완료")
-    if st.session_state.bm_user_id is None:
-        st.caption("비로그인 기록은 현재 접속에서만 유지됩니다.")
-    else:
-        st.caption("이 기록은 현재 서버의 SQLite에 저장됩니다. 앱 재배포 또는 서버 교체 시 사라질 수 있습니다.")
+st.caption("책 검색에서 '이 책으로 활동'은 활동 도서만 정합니다. "
+           "'나의 서재에 담기'를 별도로 누른 책만 서재에 저장됩니다.")
+st.caption("로그인 기록은 현재 서버의 SQLite에 저장되며, 서버 재시작·재배포 시 사라질 수 있습니다.")
