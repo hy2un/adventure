@@ -1,4 +1,4 @@
-"""책모아 PAGE 2 · 독서 집중실 (스톱워치 + 집중 사운드).
+"""책모아 · 독서 집중실 (스톱워치 + 집중 사운드 3종).
 
 필수: Streamlit 지원 버전 (st.fragment, st.audio(loop=True))
 음원: 최상위 white_noise.ogg / singing_bowl.ogg / rain.ogg
@@ -30,20 +30,22 @@ SOUNDS = {
 def show_sidebar():
     with st.sidebar:
         st.title("📚 책모아")
-        st.markdown("#### 페이지 이동")
-        st.page_link("main.py", label="🏠 MAIN · 도서관", use_container_width=True)
-        page1 = ROOT / "pages" / "1_숏폼_브레이커.py"
-        if page1.exists():
-            st.page_link("pages/1_숏폼_브레이커.py", label="🎮 PAGE 1 · 숏폼 브레이커", use_container_width=True)
-        st.page_link(f"pages/{Path(__file__).name}", label="⏱️ PAGE 2 · 독서 집중실", use_container_width=True)
+        st.markdown("#### 이동하기")
+        st.page_link("main.py", label="🏠 도서관", use_container_width=True)
+        for path, label in (
+            ("pages/0_나의_서재.py", "📚 나의 서재"),
+            ("pages/1_독서_집중실.py", "⏱️ 독서 집중실"),
+            ("pages/2_숏폼_브레이커.py", "🎮 숏폼 브레이커"),
+        ):
+            if (ROOT / path).is_file():
+                st.page_link(path, label=label, use_container_width=True)
         st.divider()
-        st.markdown("#### 👤 내 독서 기록")
-        user_id = st.session_state.get("bm_user_id")
-        if user_id is not None:
-            st.success(f"{st.session_state.get('bm_username') or '사용자'}님 로그인 중")
-            st.caption("독서 기록은 MAIN 도서관에서 확인할 수 있습니다.")
+        st.markdown("#### 👤 내 계정")
+        if st.session_state.get("bm_user_id") is not None:
+            user = st.session_state.get("bm_username") or "사용자"
+            st.success(f"{user}님 로그인 중")
         else:
-            st.info("MAIN 도서관에서 로그인할 수 있습니다.")
+            st.info("도서관에서 로그인할 수 있습니다.")
 
 
 def init_timer():
