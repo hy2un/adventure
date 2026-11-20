@@ -18,8 +18,10 @@ import unicodedata
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+import socket
+import ssl
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
@@ -330,11 +332,16 @@ def make_bookmark(title, author, quote, palette):
 # 키는 Streamlit Cloud > Settings > Secrets에 등록
 # ──────────────────────────────────────────────
 
-API_BASE = "https://data4library.kr/api"
+# 정보나루 공식 도메인 2개를 HTTPS로 확인합니다.
+# 인증키를 안전하게 전송하기 위해 HTTP(암호화되지 않은 연결)는 사용하지 않습니다.
+API_BASES = (
+    ("기본 주소", "https://data4library.kr/api"),
+    ("www 주소", "https://www.data4library.kr/api"),
+)
 
 
 class BookApiError(Exception):
-    """정보나루 연결 오류를 사용자에게 안전하게 알려준다."""
+    """API 서버 상태를 인증키 노출 없이 안내합니다."""
 
 
 def api_key_from_secrets():
@@ -346,7 +353,7 @@ def api_key_from_secrets():
 
 
 def clean_api_text(value, limit=160):
-    """도서 데이터에 포함될 수 있는 HTML 태그·공백 제거."""
+    """도서 데이터의 HTML 태그·공백 제거."""
     if value is None:
         return ""
     raw = html.unescape(str(value))
@@ -355,7 +362,7 @@ def clean_api_text(value, limit=160):
 
 
 def api_book_from_doc(raw):
-    """정보나루의 {doc: {...}} 구조를 화면용 데이터로 통일."""
+    """정보나루 {doc: {...}} 형식을 책모아 데이터로 변환합니다."""
     if not isinstance(raw, dict):
         return None
     doc = raw.get("doc", raw)
@@ -381,50 +388,114 @@ def api_book_from_doc(raw):
     }
 
 
+def _network_reason(exc):
+    """URL·인증키가 포함될 수 있는 예외 원문은 표시하지 않습니다."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(reason, (ssl.SSLError, ssl.CertificateError)):
+        return "SSL/TLS 인증서 오류"
+    if isinstance(reason, socket.gaierror):
+        return "DNS 주소 확인 실패"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "응답 시간 초과"
+    safe_name = type(reason).__name__.lower()
+    if "ssl" in safe_name or "certificate" in safe_name:
+        return "SSL/TLS 연결 오류"
+    if "timeout" in safe_name:
+        return "응답 시간 초과"
+    if "connectionrefused" in safe_name:
+        return "서버 연결 거부"
+    return "네트워크 연결 오류"
+
+
+class HTTPSOnlyRedirect(HTTPRedirectHandler):
+    """인증키를 담은 요청이 HTTP로 내려가는 리다이렉트 차단."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.lower().startswith("https://"):
+            raise URLError("insecure redirect blocked")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+API_OPENER = build_opener(HTTPSOnlyRedirect)
+
+
+def _http_reason(code):
+    if code in (401, 403):
+        return f"HTTP {code} (접근 또는 인증 제한)"
+    if code == 404:
+        return "HTTP 404 (API 경로를 찾지 못함)"
+    if code == 429:
+        return "HTTP 429 (요청 횟수 제한)"
+    if code >= 500:
+        return f"HTTP {code} (서버 내부 오류)"
+    return f"HTTP {code}"
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def request_book_api(endpoint, parameters, api_key):
-    """결과를 최대 1시간 캐시해 API 호출을 줄인다."""
+    """두 공식 HTTPS 주소에 순서대로 요청하고 실패 이유를 안내합니다.
+
+    성공한 응답만 캐시합니다. 인증키 및 인증키를 포함한 URL은
+    오류 메시지에 절대 출력하지 않습니다.
+    """
     query = dict(parameters)
     query.update({"authKey": api_key, "format": "json"})
-    url = API_BASE + "/" + endpoint + "?" + urlencode(query)
-    request = Request(url, headers={
-        "Accept": "application/json",
-        "User-Agent": "Bookmoa-Educational-App/1.0",
-    })
-    try:
-        with urlopen(request, timeout=9) as response:
-            payload = response.read(1_500_001)
-    except (HTTPError, URLError, TimeoutError, OSError):
-        # urllib 예외 메시지에 인증키가 포함될 수 있어 그대로 출력하지 않는다.
-        raise BookApiError("정보나루 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.") from None
+    issues = []
 
-    if len(payload) > 1_500_000:
-        raise BookApiError("검색 결과 크기가 너무 큽니다.")
+    for host_label, base in API_BASES:
+        # 인증키는 서버로만 전송하며 화면·로그에 URL 자체를 출력하지 않습니다.
+        url = base + "/" + endpoint + "?" + urlencode(query)
+        request = Request(url, headers={
+            "Accept": "application/json, */*;q=0.7",
+            "User-Agent": "Mozilla/5.0 (compatible; Bookmoa/1.0)",
+        })
+        try:
+            with API_OPENER.open(request, timeout=8) as response:
+                payload = response.read(1_500_001)
+        except HTTPError as exc:
+            issues.append(f"{host_label}: {_http_reason(exc.code)}")
+            continue
+        except (URLError, TimeoutError, OSError) as exc:
+            issues.append(f"{host_label}: {_network_reason(exc)}")
+            continue
 
-    try:
-        parsed = json.loads(payload.decode("utf-8-sig"))
-    except (ValueError, UnicodeDecodeError):
-        raise BookApiError("정보나루 응답 형식을 읽을 수 없습니다.") from None
+        if len(payload) > 1_500_000:
+            issues.append(f"{host_label}: 응답 크기 초과")
+            continue
+        try:
+            parsed = json.loads(payload.decode("utf-8-sig"))
+        except (ValueError, UnicodeDecodeError):
+            issues.append(f"{host_label}: JSON이 아닌 응답")
+            continue
 
-    body = parsed.get("response") if isinstance(parsed, dict) else None
-    if not isinstance(body, dict):
-        raise BookApiError("정보나루 응답에서 도서 목록을 찾지 못했습니다.")
+        body = parsed.get("response") if isinstance(parsed, dict) else None
+        if not isinstance(body, dict):
+            issues.append(f"{host_label}: 예상하지 못한 응답 구조")
+            continue
 
-    if body.get("error") or body.get("errorMsg") or body.get("errorMessage"):
-        raise BookApiError("정보나루 인증키 또는 이용 조건을 확인해 주세요.")
+        if body.get("error") or body.get("errorMsg") or body.get("errorMessage"):
+            # API 반환 문자열에 인증키·URL이 포함될 수 있으므로 원문은 숨깁니다.
+            issues.append(f"{host_label}: API 인증 또는 요청 조건 오류")
+            continue
 
-    docs = body.get("docs", [])
-    if isinstance(docs, dict):
-        docs = [docs]
-    if not isinstance(docs, list):
-        docs = []
+        docs = body.get("docs", [])
+        if isinstance(docs, dict):
+            docs = [docs]
+        if not isinstance(docs, list):
+            docs = []
 
-    result = []
-    for entry in docs:
-        book = api_book_from_doc(entry)
-        if book:
-            result.append(book)
-    return result
+        books = []
+        for entry in docs:
+            book = api_book_from_doc(entry)
+            if book:
+                books.append(book)
+        return books
+
+    raise BookApiError(
+        "도서관 정보나루 API 요청이 실패했습니다. "
+        + " / ".join(issues)
+        + " · Streamlit Secrets 인증키를 다시 확인하고, "
+          "계속 실패하면 표시된 HTTP 코드로 정보나루에 문의해 주세요."
+    )
 
 
 def find_books(keyword, api_key):
