@@ -1,13 +1,14 @@
-"""책모아 게임 | 책의 반격: 숏폼 방어 게임.
+"""북플래닛 | 숏폼 브레이커.
 
-실행: streamlit run main.py
+책의 반격: 숏폼 방어 게임.
 
 필요 이미지:
 - book_guardian.png
 - shortform_demon.png
 
-두 이미지는 GitHub 최상위에 배치합니다.
+두 이미지는 GitHub 최상위 폴더에 배치합니다.
 """
+from __future__ import annotations
 
 from pathlib import Path
 import random
@@ -16,8 +17,8 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(
-    page_title="책모아 | 숏폼 브레이커",
-    page_icon="📖",
+    page_title="북플래닛 | 숏폼 브레이커",
+    page_icon="🎮",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -43,7 +44,7 @@ def new_enemy():
         "distance": random.randint(4, 6),
         "color": random.choice(
             ("pink", "purple", "orange")
-        )
+        ),
     }
 
 
@@ -59,8 +60,8 @@ def new_game():
         ],
         "last_hit": None,
         "message": (
-            "게임 시작을 누르면 숏폼이 "
-            "책을 향해 다가옵니다."
+            "게임 시작을 누르면 "
+            "숏폼이 책을 향해 다가옵니다."
         ),
     }
 
@@ -68,7 +69,9 @@ def new_game():
 def start_game(game):
     game.clear()
     game.update(new_game())
+
     game["status"] = "playing"
+
     game["message"] = (
         "가장 가까이 다가온 숏폼이 있는 "
         "통로부터 막아 보세요."
@@ -85,14 +88,16 @@ def attack(game, lane):
 
     game["turn"] += 1
 
-    old_distance = game["enemies"][lane][
-        "distance"
-    ]
-    game["last_hit"] = (
-        lane, old_distance
+    old_distance = (
+        game["enemies"][lane]["distance"]
     )
-    game["score"] += 1
 
+    game["last_hit"] = (
+        lane,
+        old_distance,
+    )
+
+    game["score"] += 1
     game["enemies"][lane] = new_enemy()
 
     reached = 0
@@ -107,13 +112,19 @@ def attack(game, lane):
 
         if enemy["distance"] <= 0:
             reached += 1
+
             game["focus"] = max(
-                0, game["focus"] - 1
+                0,
+                game["focus"] - 1,
             )
-            game["enemies"][index] = new_enemy()
+
+            game["enemies"][index] = (
+                new_enemy()
+            )
 
     if game["focus"] == 0:
         game["status"] = "lost"
+
         game["message"] = (
             "숏폼이 독서 공간에 3번 도착했습니다. "
             "다시 도전해 보세요!"
@@ -121,6 +132,7 @@ def attack(game, lane):
 
     elif game["score"] >= GOAL:
         game["status"] = "won"
+
         game["message"] = (
             "승리! 책이 숏폼 12개를 막고 "
             "독서 공간을 지켰습니다!"
@@ -163,10 +175,11 @@ def font(size, bold=False):
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     ]
 
-    for p in candidates:
-        if Path(p).exists():
+    for path in candidates:
+        if Path(path).exists():
             return ImageFont.truetype(
-                p, size
+                path,
+                size,
             )
 
     return ImageFont.load_default()
@@ -174,14 +187,16 @@ def font(size, bold=False):
 
 def pill(
     draw, coords, fill,
-    outline=None, width=2, radius=20
+    outline=None,
+    width=2,
+    radius=20,
 ):
     draw.rounded_rectangle(
         coords,
         radius=radius,
         fill=fill,
         outline=outline,
-        width=width
+        width=width,
     )
 
 
@@ -194,34 +209,39 @@ def load_sprite(
     try:
         with Image.open(path) as original:
             sprite = original.convert("RGBA")
+
             sprite.thumbnail(
                 (max_width, max_height),
-                Image.Resampling.LANCZOS
+                Image.Resampling.LANCZOS,
             )
+
             return sprite
+
     except (OSError, ValueError):
         return None
 
 
 def draw_enemy(bg, x, y, color):
-    d = ImageDraw.Draw(bg)
+    draw = ImageDraw.Draw(bg)
 
     glow = {
         "pink": "#FF759A",
         "purple": "#B08AFF",
-        "orange": "#FFBF7D"
+        "orange": "#FFBF7D",
     }[color]
 
-    d.ellipse(
+    draw.ellipse(
         (
             x - 52, y - 51,
-            x + 52, y + 51
+            x + 52, y + 51,
         ),
-        fill=glow
+        fill=glow,
     )
 
     sprite = load_sprite(
-        DEMON_PATH, 106, 102
+        DEMON_PATH,
+        106,
+        102,
     )
 
     if sprite is not None:
@@ -229,52 +249,57 @@ def draw_enemy(bg, x, y, color):
             sprite,
             (
                 x - sprite.width // 2,
-                y - sprite.height // 2
-            )
+                y - sprite.height // 2,
+            ),
         )
+
     else:
-        d.rounded_rectangle(
+        draw.rounded_rectangle(
             (
                 x - 39, y - 43,
-                x + 39, y + 43
+                x + 39, y + 43,
             ),
             radius=17,
-            fill="#F6488C"
+            fill="#F6488C",
         )
-        d.polygon(
+
+        draw.polygon(
             (
                 (x - 10, y - 17),
                 (x - 10, y + 17),
-                (x + 21, y)
+                (x + 21, y),
             ),
-            fill="white"
+            fill="white",
         )
 
     for i, length in enumerate(
         (16, 23, 13)
     ):
         yy = y - 16 + i * 16
-        d.line(
+
+        draw.line(
             (
                 x + 58, yy,
-                x + 58 + length, yy
+                x + 58 + length, yy,
             ),
             fill="#ADC6EA",
-            width=4
+            width=4,
         )
 
 
 def draw_book_hero(bg):
-    d = ImageDraw.Draw(bg)
+    draw = ImageDraw.Draw(bg)
     center_x = 185
 
-    d.ellipse(
+    draw.ellipse(
         (100, 563, 272, 581),
-        fill="#17365C"
+        fill="#17365C",
     )
 
     sprite = load_sprite(
-        HERO_PATH, 237, 292
+        HERO_PATH,
+        237,
+        292,
     )
 
     if sprite is not None:
@@ -285,313 +310,340 @@ def draw_book_hero(bg):
 
         bg.alpha_composite(
             sprite,
-            (left, top)
+            (left, top),
         )
+
     else:
-        d.rounded_rectangle(
+        draw.rounded_rectangle(
             (120, 337, 249, 559),
             radius=25,
             fill="white",
             outline="#1684CF",
-            width=7
-        )
-        d.ellipse(
-            (156, 423, 167, 434),
-            fill="#243E65"
-        )
-        d.ellipse(
-            (201, 423, 212, 434),
-            fill="#243E65"
+            width=7,
         )
 
-    d.rounded_rectangle(
+        draw.ellipse(
+            (156, 423, 167, 434),
+            fill="#243E65",
+        )
+
+        draw.ellipse(
+            (201, 423, 212, 434),
+            fill="#243E65",
+        )
+
+    draw.rounded_rectangle(
         (68, 585, 302, 635),
         radius=18,
         fill="#FFF1B3",
         outline="#F6C75A",
-        width=3
+        width=3,
     )
 
-    d.text(
+    draw.text(
         (99, 592),
         "책의 수호자",
         font=font(29, True),
-        fill="#344563"
+        fill="#344563",
     )
 
 
 def draw_board(game):
-    im = Image.new(
+    image = Image.new(
         "RGBA",
         (BOARD_W, BOARD_H),
-        "#19335B"
+        "#19335B",
     )
-    d = ImageDraw.Draw(im)
 
+    draw = ImageDraw.Draw(image)
+
+    # 배경 그라데이션
     for y in range(BOARD_H):
         r = int(
             21 + 19 * y / BOARD_H
         )
+
         g = int(
             44 + 17 * y / BOARD_H
         )
+
         b = int(
             86 + 14 * y / BOARD_H
         )
-        d.line(
+
+        draw.line(
             (0, y, BOARD_W, y),
-            fill=(r, g, b, 255)
+            fill=(r, g, b, 255),
         )
 
     pill(
-        d,
+        draw,
         (17, 17, 1383, 742),
         None,
         "#6A86B4",
-        3, 28
+        3,
+        28,
     )
 
+    # 양쪽 책장
     for bx in (35, 1295):
         pill(
-            d,
+            draw,
             (bx, 194, bx + 70, 670),
             "#263B60",
             "#54749B",
-            radius=12
+            radius=12,
         )
 
         for row in range(6):
             for j in range(4):
                 x = bx + 9 + j * 14
                 by = 225 + row * 70
-                clr = (
+
+                color = (
                     "#DDBF85",
                     "#72A8BA",
                     "#C594A9",
-                    "#91BD9E"
+                    "#91BD9E",
                 )[(j + row) % 4]
 
-                d.rectangle(
+                draw.rectangle(
                     (
                         x, by,
-                        x + 11, by + 38
+                        x + 11, by + 38,
                     ),
-                    fill=clr
+                    fill=color,
                 )
 
-            d.line(
+            draw.line(
                 (
                     bx + 6, by + 43,
-                    bx + 64, by + 43
+                    bx + 64, by + 43,
                 ),
                 fill="#B58B69",
-                width=6
+                width=6,
             )
 
-    d.text(
+    draw.text(
         (56, 42),
         "BOOK  VS  SHORTS",
         font=font(54, True),
-        fill="#FFFBF1"
+        fill="#FFFBF1",
     )
-    d.text(
+
+    draw.text(
         (59, 115),
         "책의 반격! 다가오는 숏폼을 막아 독서 공간을 지켜요",
         font=font(28),
-        fill="#C8DFFF"
+        fill="#C8DFFF",
     )
 
     pill(
-        d,
+        draw,
         (905, 39, 1342, 115),
         "#F2F8FF",
-        radius=24
+        radius=24,
     )
-    d.text(
+
+    draw.text(
         (930, 56),
         "숏폼 이동 방향   ← ← ←",
         font=font(26, True),
-        fill="#24416D"
+        fill="#24416D",
     )
 
     pill(
-        d,
+        draw,
         (54, 209, 313, 669),
         "#24456E",
         "#5C85B6",
-        radius=32
+        radius=32,
     )
-    draw_book_hero(im)
 
-    d = ImageDraw.Draw(im)
+    draw_book_hero(image)
+    draw = ImageDraw.Draw(image)
 
-    d.line(
+    # 노란 방어선
+    draw.line(
         (
             DEFENSE_X, 224,
-            DEFENSE_X, 670
+            DEFENSE_X, 670,
         ),
         fill="#FFCE55",
-        width=12
+        width=12,
     )
 
     for y in (
         228, 332, 436, 540, 640
     ):
-        d.ellipse(
+        draw.ellipse(
             (
                 DEFENSE_X - 15, y - 15,
-                DEFENSE_X + 15, y + 15
+                DEFENSE_X + 15, y + 15,
             ),
-            fill="#FFF3A7"
+            fill="#FFF3A7",
         )
 
     pill(
-        d,
+        draw,
         (53, 683, 519, 734),
         "#FFF0BE",
         "#EDCD64",
-        radius=20
+        radius=20,
     )
 
-    d.text(
+    draw.text(
         (78, 693),
         "여기 도착하면 집중력 -1",
         font=font(25, True),
-        fill="#6C3A47"
+        fill="#6C3A47",
     )
 
+    # 세 개의 공격 통로
     for lane, y in enumerate(LANE_Y):
         pill(
-            d,
+            draw,
             (
                 411, y - 53,
-                1290, y + 53
+                1290, y + 53,
             ),
             "#294C7A",
             "#7197CB",
-            3, 28
+            3,
+            28,
         )
 
-        d.ellipse(
+        draw.ellipse(
             (
                 426, y - 32,
-                490, y + 32
+                490, y + 32,
             ),
-            fill="#C5E9FF"
+            fill="#C5E9FF",
         )
-        d.text(
+
+        draw.text(
             (446, y - 25),
             str(lane + 1),
             font=font(36, True),
-            fill="#244879"
+            fill="#244879",
         )
 
         for x in range(
             562, 1220, 96
         ):
-            d.line(
+            draw.line(
                 (
                     x + 24, y,
-                    x - 15, y
+                    x - 15, y,
                 ),
                 fill="#7FA6D3",
-                width=5
+                width=5,
             )
-            d.polygon(
+
+            draw.polygon(
                 (
                     (x - 23, y),
                     (x - 8, y - 10),
-                    (x - 8, y + 10)
+                    (x - 8, y + 10),
                 ),
-                fill="#7FA6D3"
+                fill="#7FA6D3",
             )
 
         enemy = game["enemies"][lane]
+
         enemy_x = (
             410 + enemy["distance"] * 135
         )
+
         draw_enemy(
-            im, enemy_x, y, enemy["color"]
+            image,
+            enemy_x,
+            y,
+            enemy["color"],
         )
 
-        d = ImageDraw.Draw(im)
+        draw = ImageDraw.Draw(image)
+
         if enemy["distance"] == 1:
             pill(
-                d,
+                draw,
                 (
                     enemy_x - 51, y - 57,
-                    enemy_x + 51, y + 53
+                    enemy_x + 51, y + 53,
                 ),
                 None,
                 "#FFBD68",
-                5, 19
+                5,
+                19,
             )
-            d.text(
-                (
-                    enemy_x - 43, y - 88
-                ),
+
+            draw.text(
+                (enemy_x - 43, y - 88),
                 "위험!",
                 font=font(23, True),
-                fill="#FFDD98"
+                fill="#FFDD98",
             )
 
+    # 선택한 통로의 공격 표시
     if game["last_hit"] is not None:
-        lane, dist = game["last_hit"]
-        hit_x = 410 + dist * 135
+        lane, distance = game["last_hit"]
+
+        hit_x = (
+            410 + distance * 135
+        )
+
         y = LANE_Y[lane]
 
-        d.line(
+        draw.line(
             (
                 DEFENSE_X + 7, y,
-                hit_x - 58, y
+                hit_x - 58, y,
             ),
             fill="#FFE06B",
-            width=10
+            width=10,
         )
-        d.polygon(
+
+        draw.polygon(
             (
                 (hit_x - 60, y),
                 (hit_x - 81, y - 16),
-                (hit_x - 81, y + 16)
+                (hit_x - 81, y + 16),
             ),
-            fill="#FFF8C7"
+            fill="#FFF8C7",
         )
 
         pill(
-            d,
+            draw,
             (
                 hit_x - 33, y - 78,
-                hit_x + 47, y - 44
+                hit_x + 47, y - 44,
             ),
             "#FFF4B2",
-            radius=12
-        )
-        d.text(
-            (
-                hit_x - 20, y - 74
-            ),
-            "HIT!",
-            font=font(23, True),
-            fill="#B65F4C"
+            radius=12,
         )
 
-    return im.convert("RGB")
+        draw.text(
+            (hit_x - 20, y - 74),
+            "HIT!",
+            font=font(23, True),
+            fill="#B65F4C",
+        )
+
+    return image.convert("RGB")
 
 
 def show_sidebar():
     with st.sidebar:
-        st.title("📚 책모아")
+        st.title("🪐 북플래닛")
 
-        st.page_link(
-            "main.py",
-            label="🏠 도서관",
-            use_container_width=True
-        )
-
-        for path, label in (
+        links = [
             (
-                "pages/0_나의_서재.py",
-                "📚 나의 서재"
+                "main.py",
+                "📖 도서 활동"
+            ),
+            (
+                "pages/0_독서_성장_기록.py",
+                "📊 독서 성장 기록"
             ),
             (
                 "pages/1_독서_집중실.py",
@@ -601,12 +653,14 @@ def show_sidebar():
                 "pages/2_숏폼_브레이커.py",
                 "🎮 숏폼 브레이커"
             ),
-        ):
+        ]
+
+        for path, label in links:
             if (ROOT / path).is_file():
                 st.page_link(
                     path,
                     label=label,
-                    use_container_width=True
+                    use_container_width=True,
                 )
 
         st.divider()
@@ -615,16 +669,18 @@ def show_sidebar():
         if st.session_state.get(
             "bm_user_id"
         ) is not None:
-            user = (
+            username = (
                 st.session_state.get("bm_username")
                 or "사용자"
             )
+
             st.success(
-                f"{user}님 로그인 중"
+                f"{username}님 로그인 중"
             )
+
         else:
             st.info(
-                "도서관에서 로그인할 수 있습니다."
+                "도서 활동에서 로그인할 수 있습니다."
             )
 
 
@@ -648,8 +704,9 @@ def main():
     game = st.session_state.shortform_game
 
     st.title(
-        "📖 숏폼 브레이커 | 책의 반격"
+        "🎮 숏폼 브레이커 | 책의 반격"
     )
+
     st.caption(
         "책은 왼쪽 독서 공간을 지키고, "
         "숏폼은 오른쪽에서 왼쪽으로 다가옵니다."
@@ -659,24 +716,29 @@ def main():
 
     a.metric(
         "🛡️ 막아낸 숏폼",
-        f"{game['score']} / {GOAL}"
+        f"{game['score']} / {GOAL}",
     )
+
     b.metric(
         "❤️ 독서 집중력",
-        f"{game['focus']} / {MAX_FOCUS}"
+        f"{game['focus']} / {MAX_FOCUS}",
     )
+
     c.metric(
         "🎮 진행 턴",
-        str(game["turn"])
+        str(game["turn"]),
     )
 
     st.progress(
-        min(game["score"] / GOAL, 1.0)
+        min(
+            game["score"] / GOAL,
+            1.0,
+        )
     )
 
     st.image(
         draw_board(game),
-        use_container_width=True
+        use_container_width=True,
     )
 
     if game["status"] == "ready":
@@ -692,24 +754,25 @@ def main():
         if st.button(
             "▶ 게임 시작",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         ):
             start_game(game)
             st.rerun()
 
     elif game["status"] == "playing":
         st.info(game["message"])
+
         st.markdown(
             "**어느 통로에 책장 공격을 할까요?**"
         )
 
-        cols = st.columns(3)
+        columns = st.columns(3)
 
-        for lane, col in enumerate(cols):
+        for lane, col in enumerate(columns):
             if col.button(
                 f"📖 {lane+1}번 통로 공격",
                 key=f"bm_sf_hit_{lane}",
-                use_container_width=True
+                use_container_width=True,
             ):
                 attack(game, lane)
                 st.rerun()
@@ -733,7 +796,7 @@ def main():
     if game["status"] != "ready":
         if st.button(
             "↻ 처음부터 다시 시작",
-            use_container_width=True
+            use_container_width=True,
         ):
             start_game(game)
             st.rerun()
