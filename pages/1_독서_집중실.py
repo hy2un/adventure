@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import time
-import base64
+import wave
+import io
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="북플래닛 | 독서 집중실",
@@ -76,7 +77,7 @@ def show_sidebar():
             )
 
 
-# 스톱워치 초기 설정
+# 스톱워치 초기화
 def init_timer():
     st.session_state.setdefault(
         "bm_focus_elapsed", 0.0
@@ -109,7 +110,6 @@ def elapsed_seconds():
     return elapsed
 
 
-# 시간 표시 형식
 def display_duration(seconds):
     total = max(0, int(seconds))
     hours, rest = divmod(total, 3600)
@@ -180,48 +180,132 @@ def stopwatch():
     )
 
 
-# 싱잉볼 0.85배속 반복 재생
-def singing_bowl_player(filepath):
-    audio_data = base64.b64encode(
-        filepath.read_bytes()
-    ).decode("ascii")
+# WAV 음원 최적화 및 음량 증폭
+# 처리한 음원은 캐시에 저장하여 재사용
+@st.cache_data(show_spinner=False)
+def prepare_wav(
+    filename,
+    modified,
+    speed=1.0,
+    target_rms=0.15,
+    max_gain=5.0,
+):
 
-    components.html(
-        f"""
-        <audio id="bowl"
-               controls
-               loop
-               preload="metadata"
-               style="width:100%;">
+    with wave.open(filename, "rb") as wav:
+        channels = wav.getnchannels()
+        width = wav.getsampwidth()
+        rate = wav.getframerate()
+        raw = wav.readframes(wav.getnframes())
 
-            <source
-                src="data:audio/wav;base64,{audio_data}"
-                type="audio/wav">
+    # WAV 데이터를 실수형으로 변환
+    if width == 1:
+        data = (
+            np.frombuffer(raw, dtype=np.uint8)
+            .astype(np.float32) - 128
+        ) / 128
 
-        </audio>
+    elif width == 2:
+        data = (
+            np.frombuffer(raw, dtype="<i2")
+            .astype(np.float32) / 32768
+        )
 
-        <script>
-            const audio = document.getElementById("bowl");
+    elif width == 3:
+        b = np.frombuffer(
+            raw, dtype=np.uint8
+        ).reshape(-1, 3).astype(np.int32)
 
-            function setSpeed() {{
-                audio.defaultPlaybackRate = 0.85;
-                audio.playbackRate = 0.85;
-                audio.preservesPitch = false;
-            }}
+        values = (
+            b[:, 0]
+            | (b[:, 1] << 8)
+            | (b[:, 2] << 16)
+        )
 
-            audio.addEventListener(
-                "loadedmetadata", setSpeed
-            );
+        values = (
+            values ^ 0x800000
+        ) - 0x800000
 
-            audio.addEventListener(
-                "play", setSpeed
-            );
+        data = values.astype(np.float32) / 8388608
 
-            setSpeed();
-        </script>
-        """,
-        height=70,
+    elif width == 4:
+        data = (
+            np.frombuffer(raw, dtype="<i4")
+            .astype(np.float32) / 2147483648
+        )
+
+    else:
+        raise ValueError("지원하지 않는 WAV 형식입니다.")
+
+    if data.size == 0:
+        raise ValueError("비어 있는 음원입니다.")
+
+    data = data.reshape(-1, channels)
+
+    # 재생 데이터 경량화
+    new_rate = min(rate, 24000)
+
+    if new_rate != rate:
+        old_length = len(data)
+        new_length = max(
+            1,
+            round(old_length * new_rate / rate)
+        )
+
+        old_positions = np.arange(old_length)
+        new_positions = (
+            np.arange(new_length) * rate / new_rate
+        )
+
+        data = np.column_stack([
+            np.interp(
+                new_positions,
+                old_positions,
+                data[:, channel]
+            )
+            for channel in range(channels)
+        ]).astype(np.float32)
+
+    # 원본 음량에 따라 자동 증폭
+    rms = float(np.sqrt(np.mean(data ** 2)))
+
+    if rms > 0.000001:
+        gain = min(
+            max_gain,
+            max(1.0, target_rms / rms)
+        )
+        data *= gain
+
+    # 지나치게 큰 신호의 왜곡 방지
+    magnitude = np.abs(data)
+
+    data = np.sign(data) * np.where(
+        magnitude > 0.75,
+        0.75 + 0.20 * np.tanh(
+            (magnitude - 0.75) / 0.20
+        ),
+        magnitude
     )
+
+    # 16비트 WAV 생성
+    samples = (
+        np.clip(data, -1, 1) * 32767
+    ).astype("<i2")
+
+    output = io.BytesIO()
+
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)
+
+        # 샘플링 주파수를 조절하여
+        # 싱잉볼 재생 속도와 음높이 변경
+        wav.setframerate(
+            round(new_rate * speed)
+        )
+
+        wav.writeframes(samples.tobytes())
+
+    return output.getvalue()
 
 
 # 집중 사운드 선택 및 재생
@@ -241,39 +325,71 @@ def focus_sound_player():
 
     filepath = ROOT / filename
 
-    # 음원 파일 누락 시 예외 처리
     if not filepath.is_file():
         st.warning(
             f"아직 음원 파일이 없습니다: {filename}"
         )
         return
 
-    # 싱잉볼은 0.85배속으로 재생
-    if filename == "singing_bowl_original.wav":
-        singing_bowl_player(filepath)
-
-    # 백색소음과 빗소리는 정상 속도로 재생
-    else:
-        audio_format = (
-            "audio/wav"
-            if filepath.suffix.lower() == ".wav"
-            else "audio/ogg"
-        )
-
+    # 백색소음은 원본 그대로 재생
+    if filename == "white_noise.ogg":
         st.audio(
             filepath,
-            format=audio_format,
+            format="audio/ogg",
             loop=True,
             autoplay=False,
         )
+
+    else:
+        try:
+            if filename == "singing_bowl_original.wav":
+
+                # 싱잉볼 음량 증폭 및 0.85배속
+                audio = prepare_wav(
+                    str(filepath),
+                    filepath.stat().st_mtime,
+                    speed=0.85,
+                    target_rms=0.15,
+                    max_gain=5.0,
+                )
+
+            else:
+
+                # 빗소리 음량 증폭
+                audio = prepare_wav(
+                    str(filepath),
+                    filepath.stat().st_mtime,
+                    speed=1.0,
+                    target_rms=0.17,
+                    max_gain=5.0,
+                )
+
+            st.audio(
+                audio,
+                format="audio/wav",
+                loop=True,
+                autoplay=False,
+            )
+
+        except Exception:
+            st.warning(
+                "음원 최적화에 실패하여 원본을 재생합니다."
+            )
+
+            st.audio(
+                filepath,
+                format="audio/wav",
+                loop=True,
+                autoplay=False,
+            )
 
     st.success(
         "재생 버튼을 누르면 음원이 반복 재생됩니다."
     )
 
     st.caption(
-        "음원을 변경하거나 다른 페이지로 이동하면 "
-        "재생이 중단될 수 있습니다."
+        "음량과 일시정지는 플레이어에서 조절하세요. "
+        "다른 페이지로 이동하면 재생이 중단될 수 있습니다."
     )
 
 
