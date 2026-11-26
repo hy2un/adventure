@@ -1,18 +1,11 @@
-"""북플래닛 | 독서 집중실.
-
-독서 스톱워치와 집중 사운드 3종.
-음원은 GitHub 최상위 폴더에 배치합니다.
-
-white_noise.ogg
-singing_bowl.ogg
-rain.ogg
-"""
 from __future__ import annotations
 
 import time
+import base64
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="북플래닛 | 독서 집중실",
@@ -26,28 +19,26 @@ ROOT = Path(__file__).resolve().parent.parent
 SOUNDS = {
     "🌫️ 부드러운 백색소음": (
         "white_noise.ogg",
-        "직접 생성한 부드러운 노이즈"
+        "부드러운 백색소음"
     ),
     "🔔 저음 싱잉볼": (
-        "singing_bowl.ogg",
-        "WAV 원본을 0.85배속으로 편집한 소리"
+        "singing_bowl_original.wav",
+        "0.85배속으로 재생하는 저음 싱잉볼"
     ),
     "🌧️ 잔잔한 빗소리": (
-        "rain.ogg",
-        "WAV 원본을 OGG로 변환한 빗소리"
+        "rain.wav",
+        "잔잔하게 내리는 빗소리"
     ),
 }
 
 
+# 사이드바
 def show_sidebar():
     with st.sidebar:
         st.title("🪐 북플래닛")
 
         links = [
-            (
-                "main.py",
-                "📖 도서 활동"
-            ),
+            ("main.py", "📖 도서 활동"),
             (
                 "pages/0_독서_성장_기록.py",
                 "📊 독서 성장 기록"
@@ -73,40 +64,32 @@ def show_sidebar():
         st.divider()
         st.markdown("#### 👤 내 계정")
 
-        if st.session_state.get(
-            "bm_user_id"
-        ) is not None:
+        if st.session_state.get("bm_user_id") is not None:
             username = (
                 st.session_state.get("bm_username")
                 or "사용자"
             )
-            st.success(
-                f"{username}님 로그인 중"
-            )
-
+            st.success(f"{username}님 로그인 중")
         else:
             st.info(
                 "도서 활동에서 로그인할 수 있습니다."
             )
 
 
+# 스톱워치 초기 설정
 def init_timer():
     st.session_state.setdefault(
-        "bm_focus_elapsed",
-        0.0
+        "bm_focus_elapsed", 0.0
     )
-
     st.session_state.setdefault(
-        "bm_focus_started_at",
-        None
+        "bm_focus_started_at", None
     )
-
     st.session_state.setdefault(
-        "bm_focus_running",
-        False
+        "bm_focus_running", False
     )
 
 
+# 독서 시간 계산
 def elapsed_seconds():
     elapsed = float(
         st.session_state.bm_focus_elapsed
@@ -126,38 +109,21 @@ def elapsed_seconds():
     return elapsed
 
 
+# 시간 표시 형식
 def display_duration(seconds):
-    total = max(
-        0,
-        int(seconds)
-    )
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, sec = divmod(rest, 60)
 
-    hours, rest = divmod(
-        total,
-        3600
-    )
-
-    minutes, sec = divmod(
-        rest,
-        60
-    )
-
-    return (
-        f"{hours:02d}:"
-        f"{minutes:02d}:"
-        f"{sec:02d}"
-    )
+    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
+# 스톱워치 영역만 1초마다 갱신
 @st.fragment(run_every="1s")
 def stopwatch():
-    running = bool(
-        st.session_state.bm_focus_running
-    )
+    running = st.session_state.bm_focus_running
 
-    st.markdown(
-        "#### ⏱️ 독서 스톱워치"
-    )
+    st.markdown("#### ⏱️ 독서 스톱워치")
 
     st.markdown(
         "<div style='text-align:center;"
@@ -174,9 +140,7 @@ def stopwatch():
 
     with left:
         if st.button(
-            "▶ 시작 / 재개"
-            if not running
-            else "▶ 측정 중",
+            "▶ 시작 / 재개" if not running else "▶ 측정 중",
             disabled=running,
             use_container_width=True,
             type="primary",
@@ -184,12 +148,8 @@ def stopwatch():
             st.session_state.bm_focus_started_at = (
                 time.monotonic()
             )
-
             st.session_state.bm_focus_running = True
-
-            st.rerun(
-                scope="fragment"
-            )
+            st.rerun(scope="fragment")
 
     with middle:
         if st.button(
@@ -200,13 +160,9 @@ def stopwatch():
             st.session_state.bm_focus_elapsed = (
                 elapsed_seconds()
             )
-
             st.session_state.bm_focus_started_at = None
             st.session_state.bm_focus_running = False
-
-            st.rerun(
-                scope="fragment"
-            )
+            st.rerun(scope="fragment")
 
     with right:
         if st.button(
@@ -216,23 +172,61 @@ def stopwatch():
             st.session_state.bm_focus_elapsed = 0.0
             st.session_state.bm_focus_started_at = None
             st.session_state.bm_focus_running = False
-
-            st.rerun(
-                scope="fragment"
-            )
+            st.rerun(scope="fragment")
 
     st.caption(
-        "독서 시간이 3시간을 넘어도 "
-        "계속 측정합니다. "
-        "브라우저 세션이 종료되면 "
-        "기록이 초기화될 수 있습니다."
+        "5시간 이상 독서 시간을 측정할 수 있습니다. "
+        "브라우저 세션 종료 시 기록이 초기화될 수 있습니다."
     )
 
 
+# 싱잉볼 0.85배속 반복 재생
+def singing_bowl_player(filepath):
+    audio_data = base64.b64encode(
+        filepath.read_bytes()
+    ).decode("ascii")
+
+    components.html(
+        f"""
+        <audio id="bowl"
+               controls
+               loop
+               preload="metadata"
+               style="width:100%;">
+
+            <source
+                src="data:audio/wav;base64,{audio_data}"
+                type="audio/wav">
+
+        </audio>
+
+        <script>
+            const audio = document.getElementById("bowl");
+
+            function setSpeed() {{
+                audio.defaultPlaybackRate = 0.85;
+                audio.playbackRate = 0.85;
+                audio.preservesPitch = false;
+            }}
+
+            audio.addEventListener(
+                "loadedmetadata", setSpeed
+            );
+
+            audio.addEventListener(
+                "play", setSpeed
+            );
+
+            setSpeed();
+        </script>
+        """,
+        height=70,
+    )
+
+
+# 집중 사운드 선택 및 재생
 def focus_sound_player():
-    st.markdown(
-        "#### 🎧 집중 사운드"
-    )
+    st.markdown("#### 🎧 집중 사운드")
 
     selected = st.radio(
         "듣고 싶은 소리",
@@ -247,43 +241,48 @@ def focus_sound_player():
 
     filepath = ROOT / filename
 
-    if filepath.is_file():
+    # 음원 파일 누락 시 예외 처리
+    if not filepath.is_file():
+        st.warning(
+            f"아직 음원 파일이 없습니다: {filename}"
+        )
+        return
+
+    # 싱잉볼은 0.85배속으로 재생
+    if filename == "singing_bowl_original.wav":
+        singing_bowl_player(filepath)
+
+    # 백색소음과 빗소리는 정상 속도로 재생
+    else:
+        audio_format = (
+            "audio/wav"
+            if filepath.suffix.lower() == ".wav"
+            else "audio/ogg"
+        )
+
         st.audio(
             filepath,
-            format="audio/ogg",
+            format=audio_format,
             loop=True,
             autoplay=False,
         )
 
-        st.success(
-            "재생 버튼을 누르면 반복 재생됩니다. "
-            "음량과 일시정지는 "
-            "플레이어에서 조절하세요."
-        )
+    st.success(
+        "재생 버튼을 누르면 음원이 반복 재생됩니다."
+    )
 
-        st.caption(
-            "소리를 바꾸거나 다른 페이지로 이동하면 "
-            "재생이 중단되거나 처음부터 시작할 수 있습니다."
-        )
-
-    else:
-        st.warning(
-            f"아직 음원 파일이 없습니다: `{filename}`"
-        )
-
-        st.info(
-            "해당 OGG 파일을 GitHub 저장소 "
-            "최상위 폴더에 업로드해 주세요."
-        )
+    st.caption(
+        "음원을 변경하거나 다른 페이지로 이동하면 "
+        "재생이 중단될 수 있습니다."
+    )
 
 
+# 메인 화면
 def main():
     show_sidebar()
     init_timer()
 
-    st.title(
-        "📖 독서 집중실"
-    )
+    st.title("📖 독서 집중실")
 
     st.caption(
         "독서 시간을 측정하고, "
