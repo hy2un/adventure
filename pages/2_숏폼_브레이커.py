@@ -1,13 +1,7 @@
 """북플래닛 | 숏폼 브레이커.
-
 책의 반격: 숏폼 방어 게임.
-
-필요 이미지:
-- book_guardian.png
-- shortform_demon.png
-
-두 이미지는 GitHub 최상위 폴더에 배치합니다.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,6 +9,9 @@ import random
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
+
+from bookplanet_db import reset_legacy_session
+
 
 st.set_page_config(
     page_title="북플래닛 | 숏폼 브레이커",
@@ -39,6 +36,7 @@ LANE_Y = (314, 453, 592)
 DEFENSE_X = 371
 
 
+# 숏폼 악마 생성
 def new_enemy():
     return {
         "distance": random.randint(4, 6),
@@ -48,6 +46,7 @@ def new_enemy():
     }
 
 
+# 게임 초기 상태
 def new_game():
     return {
         "status": "ready",
@@ -66,6 +65,7 @@ def new_game():
     }
 
 
+# 게임 시작
 def start_game(game):
     game.clear()
     game.update(new_game())
@@ -78,8 +78,8 @@ def start_game(game):
     )
 
 
+# 선택한 통로 공격
 def attack(game, lane):
-    """선택한 통로 공격, 나머지 적 전진."""
     if (
         game["status"] != "playing"
         or lane not in range(LANES)
@@ -98,10 +98,12 @@ def attack(game, lane):
     )
 
     game["score"] += 1
+
     game["enemies"][lane] = new_enemy()
 
     reached = 0
 
+    # 나머지 통로의 숏폼 악마 이동
     for index, enemy in enumerate(
         game["enemies"]
     ):
@@ -122,6 +124,7 @@ def attack(game, lane):
                 new_enemy()
             )
 
+    # 패배 조건
     if game["focus"] == 0:
         game["status"] = "lost"
 
@@ -130,6 +133,7 @@ def attack(game, lane):
             "다시 도전해 보세요!"
         )
 
+    # 승리 조건
     elif game["score"] >= GOAL:
         game["status"] = "won"
 
@@ -151,6 +155,7 @@ def attack(game, lane):
         )
 
 
+# 글꼴
 def font(size, bold=False):
     candidates = [
         (
@@ -185,8 +190,11 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 
+# 둥근 사각형
 def pill(
-    draw, coords, fill,
+    draw,
+    coords,
+    fill,
     outline=None,
     width=2,
     radius=20,
@@ -200,8 +208,11 @@ def pill(
     )
 
 
+# 캐릭터 이미지 불러오기
 def load_sprite(
-    path, max_width, max_height
+    path,
+    max_width,
+    max_height,
 ):
     if not path.is_file():
         return None
@@ -221,6 +232,7 @@ def load_sprite(
         return None
 
 
+# 숏폼 악마 그리기
 def draw_enemy(bg, x, y, color):
     draw = ImageDraw.Draw(bg)
 
@@ -232,8 +244,10 @@ def draw_enemy(bg, x, y, color):
 
     draw.ellipse(
         (
-            x - 52, y - 51,
-            x + 52, y + 51,
+            x - 52,
+            y - 51,
+            x + 52,
+            y + 51,
         ),
         fill=glow,
     )
@@ -256,8 +270,10 @@ def draw_enemy(bg, x, y, color):
     else:
         draw.rounded_rectangle(
             (
-                x - 39, y - 43,
-                x + 39, y + 43,
+                x - 39,
+                y - 43,
+                x + 39,
+                y + 43,
             ),
             radius=17,
             fill="#F6488C",
@@ -279,16 +295,20 @@ def draw_enemy(bg, x, y, color):
 
         draw.line(
             (
-                x + 58, yy,
-                x + 58 + length, yy,
+                x + 58,
+                yy,
+                x + 58 + length,
+                yy,
             ),
             fill="#ADC6EA",
             width=4,
         )
 
 
+# 책의 수호자 그리기
 def draw_book_hero(bg):
     draw = ImageDraw.Draw(bg)
+
     center_x = 185
 
     draw.ellipse(
@@ -306,6 +326,7 @@ def draw_book_hero(bg):
         left = (
             center_x - sprite.width // 2
         )
+
         top = 559 - sprite.height
 
         bg.alpha_composite(
@@ -348,6 +369,7 @@ def draw_book_hero(bg):
     )
 
 
+# 전체 게임 화면 구성
 def draw_board(game):
     image = Image.new(
         "RGBA",
@@ -409,21 +431,26 @@ def draw_board(game):
 
                 draw.rectangle(
                     (
-                        x, by,
-                        x + 11, by + 38,
+                        x,
+                        by,
+                        x + 11,
+                        by + 38,
                     ),
                     fill=color,
                 )
 
             draw.line(
                 (
-                    bx + 6, by + 43,
-                    bx + 64, by + 43,
+                    bx + 6,
+                    by + 43,
+                    bx + 64,
+                    by + 43,
                 ),
                 fill="#B58B69",
                 width=6,
             )
 
+    # 게임 제목
     draw.text(
         (56, 42),
         "BOOK  VS  SHORTS",
@@ -452,6 +479,7 @@ def draw_board(game):
         fill="#24416D",
     )
 
+    # 책의 수호자 영역
     pill(
         draw,
         (54, 209, 313, 669),
@@ -461,25 +489,34 @@ def draw_board(game):
     )
 
     draw_book_hero(image)
+
     draw = ImageDraw.Draw(image)
 
     # 노란 방어선
     draw.line(
         (
-            DEFENSE_X, 224,
-            DEFENSE_X, 670,
+            DEFENSE_X,
+            224,
+            DEFENSE_X,
+            670,
         ),
         fill="#FFCE55",
         width=12,
     )
 
     for y in (
-        228, 332, 436, 540, 640
+        228,
+        332,
+        436,
+        540,
+        640,
     ):
         draw.ellipse(
             (
-                DEFENSE_X - 15, y - 15,
-                DEFENSE_X + 15, y + 15,
+                DEFENSE_X - 15,
+                y - 15,
+                DEFENSE_X + 15,
+                y + 15,
             ),
             fill="#FFF3A7",
         )
@@ -504,8 +541,10 @@ def draw_board(game):
         pill(
             draw,
             (
-                411, y - 53,
-                1290, y + 53,
+                411,
+                y - 53,
+                1290,
+                y + 53,
             ),
             "#294C7A",
             "#7197CB",
@@ -515,8 +554,10 @@ def draw_board(game):
 
         draw.ellipse(
             (
-                426, y - 32,
-                490, y + 32,
+                426,
+                y - 32,
+                490,
+                y + 32,
             ),
             fill="#C5E9FF",
         )
@@ -528,13 +569,18 @@ def draw_board(game):
             fill="#244879",
         )
 
+        # 이동 방향 화살표
         for x in range(
-            562, 1220, 96
+            562,
+            1220,
+            96,
         ):
             draw.line(
                 (
-                    x + 24, y,
-                    x - 15, y,
+                    x + 24,
+                    y,
+                    x - 15,
+                    y,
                 ),
                 fill="#7FA6D3",
                 width=5,
@@ -564,12 +610,15 @@ def draw_board(game):
 
         draw = ImageDraw.Draw(image)
 
+        # 방어선에 가까운 숏폼 위험 표시
         if enemy["distance"] == 1:
             pill(
                 draw,
                 (
-                    enemy_x - 51, y - 57,
-                    enemy_x + 51, y + 53,
+                    enemy_x - 51,
+                    y - 57,
+                    enemy_x + 51,
+                    y + 53,
                 ),
                 None,
                 "#FFBD68",
@@ -578,13 +627,16 @@ def draw_board(game):
             )
 
             draw.text(
-                (enemy_x - 43, y - 88),
+                (
+                    enemy_x - 43,
+                    y - 88,
+                ),
                 "위험!",
                 font=font(23, True),
                 fill="#FFDD98",
             )
 
-    # 선택한 통로의 공격 표시
+    # 공격 효과 표시
     if game["last_hit"] is not None:
         lane, distance = game["last_hit"]
 
@@ -596,8 +648,10 @@ def draw_board(game):
 
         draw.line(
             (
-                DEFENSE_X + 7, y,
-                hit_x - 58, y,
+                DEFENSE_X + 7,
+                y,
+                hit_x - 58,
+                y,
             ),
             fill="#FFE06B",
             width=10,
@@ -615,15 +669,20 @@ def draw_board(game):
         pill(
             draw,
             (
-                hit_x - 33, y - 78,
-                hit_x + 47, y - 44,
+                hit_x - 33,
+                y - 78,
+                hit_x + 47,
+                y - 44,
             ),
             "#FFF4B2",
             radius=12,
         )
 
         draw.text(
-            (hit_x - 20, y - 74),
+            (
+                hit_x - 20,
+                y - 74,
+            ),
             "HIT!",
             font=font(23, True),
             fill="#B65F4C",
@@ -632,6 +691,7 @@ def draw_board(game):
     return image.convert("RGB")
 
 
+# 사이드바 및 로그인 상태
 def show_sidebar():
     with st.sidebar:
         st.title("🪐 북플래닛")
@@ -639,19 +699,19 @@ def show_sidebar():
         links = [
             (
                 "main.py",
-                "📖 도서 활동"
+                "📖 도서 활동",
             ),
             (
                 "pages/0_독서_성장_기록.py",
-                "📊 독서 성장 기록"
+                "📊 독서 성장 기록",
             ),
             (
                 "pages/1_독서_집중실.py",
-                "⏱️ 독서 집중실"
+                "⏱️ 독서 집중실",
             ),
             (
                 "pages/2_숏폼_브레이커.py",
-                "🎮 숏폼 브레이커"
+                "🎮 숏폼 브레이커",
             ),
         ]
 
@@ -664,11 +724,13 @@ def show_sidebar():
                 )
 
         st.divider()
+
         st.markdown("#### 👤 내 계정")
 
         if st.session_state.get(
             "bm_user_id"
         ) is not None:
+
             username = (
                 st.session_state.get("bm_username")
                 or "사용자"
@@ -684,18 +746,19 @@ def show_sidebar():
             )
 
 
+# 메인 화면
 def main():
+    reset_legacy_session()
+
     show_sidebar()
 
     if (
-        "shortform_game"
-        not in st.session_state
+        "shortform_game" not in st.session_state
         or not isinstance(
             st.session_state.shortform_game,
-            dict
+            dict,
         )
-        or "focus"
-        not in st.session_state.shortform_game
+        or "focus" not in st.session_state.shortform_game
     ):
         st.session_state.shortform_game = (
             new_game()
@@ -712,6 +775,7 @@ def main():
         "숏폼은 오른쪽에서 왼쪽으로 다가옵니다."
     )
 
+    # 게임 상태 표시
     a, b, c = st.columns(3)
 
     a.metric(
@@ -741,6 +805,7 @@ def main():
         use_container_width=True,
     )
 
+    # 게임 시작 화면
     if game["status"] == "ready":
         st.info(
             "📌 게임 방법: 오른쪽에서 출발하는 "
@@ -759,6 +824,7 @@ def main():
             start_game(game)
             st.rerun()
 
+    # 게임 진행 화면
     elif game["status"] == "playing":
         st.info(game["message"])
 
@@ -770,7 +836,7 @@ def main():
 
         for lane, col in enumerate(columns):
             if col.button(
-                f"📖 {lane+1}번 통로 공격",
+                f"📖 {lane + 1}번 통로 공격",
                 key=f"bm_sf_hit_{lane}",
                 use_container_width=True,
             ):
@@ -783,16 +849,19 @@ def main():
             "실시간으로 자동 이동하지 않습니다."
         )
 
+    # 승리 화면
     elif game["status"] == "won":
         st.success(
             "🏆 " + game["message"]
         )
 
+    # 패배 화면
     else:
         st.error(
             "💔 " + game["message"]
         )
 
+    # 게임 다시 시작
     if game["status"] != "ready":
         if st.button(
             "↻ 처음부터 다시 시작",
