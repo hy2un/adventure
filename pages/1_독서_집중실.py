@@ -10,6 +10,8 @@ import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
+from bookplanet_db import reset_legacy_session
+
 
 st.set_page_config(
     page_title="북플래닛 | 독서 집중실",
@@ -23,15 +25,17 @@ ROOT = Path(__file__).resolve().parent.parent
 SOUNDS = {
     "🌫️ 부드러운 백색소음": (
         "white_noise.ogg",
-        "부드러운 백색소음"
+        "부드러운 백색소음",
     ),
+
     "🔔 저음 싱잉볼": (
         "singing_bowl_original.wav",
-        "0.85배속으로 재생하는 저음 싱잉볼"
+        "0.85배속으로 재생하는 저음 싱잉볼",
     ),
+
     "🌧️ 잔잔한 빗소리": (
         "rain.wav",
-        "잔잔하게 내리는 빗소리"
+        "잔잔하게 내리는 빗소리",
     ),
 }
 
@@ -45,15 +49,15 @@ def show_sidebar():
             ("main.py", "📖 도서 활동"),
             (
                 "pages/0_독서_성장_기록.py",
-                "📊 독서 성장 기록"
+                "📊 독서 성장 기록",
             ),
             (
                 "pages/1_독서_집중실.py",
-                "⏱️ 독서 집중실"
+                "⏱️ 독서 집중실",
             ),
             (
                 "pages/2_숏폼_브레이커.py",
-                "🎮 숏폼 브레이커"
+                "🎮 숏폼 브레이커",
             ),
         ]
 
@@ -73,7 +77,9 @@ def show_sidebar():
                 st.session_state.get("bm_username")
                 or "사용자"
             )
+
             st.success(f"{username}님 로그인 중")
+
         else:
             st.info(
                 "도서 활동에서 로그인할 수 있습니다."
@@ -85,9 +91,11 @@ def init_timer():
     st.session_state.setdefault(
         "bm_focus_elapsed", 0.0
     )
+
     st.session_state.setdefault(
         "bm_focus_started_at", None
     )
+
     st.session_state.setdefault(
         "bm_focus_running", False
     )
@@ -107,12 +115,13 @@ def elapsed_seconds():
         if started is not None:
             elapsed += max(
                 0.0,
-                time.monotonic() - started
+                time.monotonic() - started,
             )
 
     return elapsed
 
 
+# 시간 표시
 def display_duration(seconds):
     total = max(0, int(seconds))
 
@@ -122,28 +131,33 @@ def display_duration(seconds):
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
+# 스톱워치 시작
 def start_timer():
     st.session_state.bm_focus_started_at = (
         time.monotonic()
     )
+
     st.session_state.bm_focus_running = True
 
 
+# 스톱워치 일시정지
 def pause_timer():
     st.session_state.bm_focus_elapsed = (
         elapsed_seconds()
     )
+
     st.session_state.bm_focus_started_at = None
     st.session_state.bm_focus_running = False
 
 
+# 스톱워치 초기화
 def reset_timer():
     st.session_state.bm_focus_elapsed = 0.0
     st.session_state.bm_focus_started_at = None
     st.session_state.bm_focus_running = False
 
 
-# 스톱워치 영역만 갱신
+# 스톱워치 영역만 1초마다 갱신
 @st.fragment(run_every="1s")
 def stopwatch():
     running = st.session_state.bm_focus_running
@@ -166,8 +180,7 @@ def stopwatch():
     with left:
         st.button(
             "▶ 시작 / 재개"
-            if not running
-            else "▶ 측정 중",
+            if not running else "▶ 측정 중",
             disabled=running,
             use_container_width=True,
             type="primary",
@@ -196,7 +209,10 @@ def stopwatch():
 
 
 # WAV 음원 최적화 및 캐싱
-@st.cache_data(show_spinner=False, max_entries=6)
+@st.cache_data(
+    show_spinner=False,
+    max_entries=6,
+)
 def prepare_wav(
     filename,
     modified,
@@ -208,7 +224,10 @@ def prepare_wav(
         channels = wav.getnchannels()
         width = wav.getsampwidth()
         rate = wav.getframerate()
-        raw = wav.readframes(wav.getnframes())
+
+        raw = wav.readframes(
+            wav.getnframes()
+        )
 
     if width == 1:
         data = (
@@ -224,7 +243,8 @@ def prepare_wav(
 
     elif width == 3:
         b = np.frombuffer(
-            raw, dtype=np.uint8
+            raw,
+            dtype=np.uint8,
         ).reshape(-1, 3).astype(np.int32)
 
         values = (
@@ -245,8 +265,7 @@ def prepare_wav(
     elif width == 4:
         data = (
             np.frombuffer(raw, dtype="<i4")
-            .astype(np.float32)
-            / 2147483648
+            .astype(np.float32) / 2147483648
         )
 
     else:
@@ -259,7 +278,7 @@ def prepare_wav(
 
     data = data.reshape(-1, channels)
 
-    # 재생 데이터 경량화
+    # 음원 용량 최적화
     new_rate = min(rate, 24000)
 
     if new_rate != rate:
@@ -269,7 +288,7 @@ def prepare_wav(
             1,
             round(
                 old_length * new_rate / rate
-            )
+            ),
         )
 
         old_positions = np.arange(old_length)
@@ -283,12 +302,12 @@ def prepare_wav(
             np.interp(
                 new_positions,
                 old_positions,
-                data[:, channel]
+                data[:, channel],
             )
             for channel in range(channels)
         ]).astype(np.float32)
 
-    # 기본 음량 증폭
+    # 음량 증폭
     rms = float(
         np.sqrt(np.mean(data ** 2))
     )
@@ -296,11 +315,12 @@ def prepare_wav(
     if rms > 0.000001:
         gain = min(
             max_gain,
-            max(1.0, target_rms / rms)
+            max(1.0, target_rms / rms),
         )
+
         data *= gain
 
-    # 과도한 음량의 왜곡 완화
+    # 과도한 음량 왜곡 완화
     magnitude = np.abs(data)
 
     data = np.sign(data) * np.where(
@@ -308,7 +328,7 @@ def prepare_wav(
         0.75 + 0.20 * np.tanh(
             (magnitude - 0.75) / 0.20
         ),
-        magnitude
+        magnitude,
     )
 
     samples = (
@@ -332,20 +352,21 @@ def prepare_wav(
     return output.getvalue()
 
 
-# 음원 전달 데이터 캐싱
-@st.cache_data(show_spinner=False, max_entries=6)
+# 음원 데이터 인코딩 및 캐싱
+@st.cache_data(
+    show_spinner=False,
+    max_entries=6,
+)
 def encode_audio(audio_data):
     return base64.b64encode(
         audio_data
     ).decode("ascii")
 
 
-# 누적 재생 시간 전용 플레이어
+# 누적 재생 시간 표시 전용 플레이어
 def continuous_player(audio_data, audio_format):
-
     encoded = encode_audio(audio_data)
 
-    # 외부 음원 주소 대신 실제 데이터를 전달
     audio_source = (
         f"data:{audio_format};base64,{encoded}"
     )
@@ -372,7 +393,7 @@ def continuous_player(audio_data, audio_format):
                 background: #f1f7f3;
                 border: 1px solid #d7e7dc;
                 border-radius: 16px;
-                padding: 22px;
+                padding: 20px;
                 text-align: center;
             }
 
@@ -422,6 +443,11 @@ def continuous_player(audio_data, audio_format):
                 background: #2e6849;
             }
 
+            button:disabled {
+                opacity: 0.6;
+                cursor: wait;
+            }
+
             #stop {
                 background: #e0ebe3;
                 color: #294638;
@@ -450,6 +476,17 @@ def continuous_player(audio_data, audio_format):
                 margin-top: 14px;
                 font-size: 12px;
                 color: #668173;
+            }
+
+            @media (max-width: 450px) {
+                #timer {
+                    font-size: 34px;
+                }
+
+                button {
+                    min-width: 85px;
+                    padding: 10px 14px;
+                }
             }
         </style>
     </head>
@@ -540,7 +577,6 @@ def continuous_player(audio_data, audio_format):
             const level =
                 document.getElementById("level");
 
-
             let elapsed = 0;
             let started = null;
             let stopped = true;
@@ -550,7 +586,7 @@ def continuous_player(audio_data, audio_format):
             audio.volume = 1.0;
 
 
-            // 재생이 중단되면 누적 시간 저장
+            // 누적 재생 시간 저장
             function freezeTime() {
 
                 if (started !== null) {
@@ -563,7 +599,7 @@ def continuous_player(audio_data, audio_format):
             }
 
 
-            // 전체 누적 시간 표시
+            // 시간 표시
             function updateTimer() {
 
                 let total = elapsed;
@@ -598,13 +634,16 @@ def continuous_player(audio_data, audio_format):
             play.onclick = async () => {
 
                 if (!audio.paused) {
+
                     audio.pause();
+
                     return;
                 }
 
                 stopped = false;
 
-                const currentRequest = ++requestId;
+                const currentRequest =
+                    ++requestId;
 
                 play.disabled = true;
 
@@ -623,11 +662,13 @@ def continuous_player(audio_data, audio_format):
                     ) {
 
                         freezeTime();
+                        updateTimer();
 
                         status.textContent =
                             "재생 오류: " + error.name;
 
-                        play.textContent = "▶ 재생";
+                        play.textContent =
+                            "▶ 재생";
                     }
 
                 } finally {
@@ -635,24 +676,26 @@ def continuous_player(audio_data, audio_format):
                     if (
                         currentRequest === requestId
                     ) {
+
                         play.disabled = false;
                     }
                 }
             };
 
 
-            // 실제 재생 시작
+            // 실제 음원 재생 시작
             audio.onplaying = () => {
 
                 if (stopped) {
+
                     audio.pause();
+
                     return;
                 }
 
                 if (started === null) {
 
-                    started =
-                        performance.now();
+                    started = performance.now();
                 }
 
                 play.disabled = false;
@@ -683,13 +726,14 @@ def continuous_player(audio_data, audio_format):
             };
 
 
-            // 음원 로딩 중 시간 측정 정지
+            // 음원 로딩 중
             audio.onwaiting = () => {
 
                 freezeTime();
                 updateTimer();
 
                 if (!stopped) {
+
                     status.textContent =
                         "음원 불러오는 중";
                 }
@@ -705,6 +749,7 @@ def continuous_player(audio_data, audio_format):
                 audio.pause();
 
                 if (audio.readyState > 0) {
+
                     audio.currentTime = 0;
                 }
 
@@ -730,7 +775,7 @@ def continuous_player(audio_data, audio_format):
                     Number(volume.value) / 100;
 
                 level.textContent =
-                    volume.value + "%";
+                    Math.round(audio.volume * 100) + "%";
             };
 
 
@@ -754,18 +799,19 @@ def continuous_player(audio_data, audio_format):
             };
 
 
-            // 누적 재생 시간 화면 갱신
+            // 누적 시간 갱신
             setInterval(updateTimer, 250);
 
         </script>
 
     </body>
+
     </html>
     """
 
     player = player.replace(
         "AUDIO_DATA",
-        audio_source
+        audio_source,
     )
 
     components.html(
@@ -777,7 +823,6 @@ def continuous_player(audio_data, audio_format):
 
 # 집중 사운드 선택 및 재생
 def focus_sound_player():
-
     st.markdown("#### 🎧 집중 사운드")
 
     selected = st.radio(
@@ -794,28 +839,22 @@ def focus_sound_player():
     filepath = ROOT / filename
 
     if not filepath.is_file():
-
         st.warning(
             f"음원 파일이 없습니다: {filename}"
         )
-
         return
 
-    # 백색소음 원본 유지
+    # 백색소음은 기존 음원 유지
     if filename == "white_noise.ogg":
-
         audio = filepath.read_bytes()
         audio_format = "audio/ogg"
 
     else:
-
         audio_format = "audio/wav"
 
         try:
-
-            # 싱잉볼 음량 증폭 및 0.85배속
+            # 싱잉볼 0.85배속 및 음량 증폭
             if filename == "singing_bowl_original.wav":
-
                 audio = prepare_wav(
                     str(filepath),
                     filepath.stat().st_mtime,
@@ -826,7 +865,6 @@ def focus_sound_player():
 
             # 빗소리 음량 증폭
             else:
-
                 audio = prepare_wav(
                     str(filepath),
                     filepath.stat().st_mtime,
@@ -835,8 +873,7 @@ def focus_sound_player():
                     max_gain=5.0,
                 )
 
-        except Exception as error:
-
+        except Exception:
             st.warning(
                 "음원 최적화에 실패하여 "
                 "원본 음원을 사용합니다."
@@ -844,8 +881,7 @@ def focus_sound_player():
 
             audio = filepath.read_bytes()
 
-
-    # 재생 오류 발생 시 기본 플레이어 선택 가능
+    # 재생 오류 발생 시 대체 플레이어
     basic_player = st.checkbox(
         "기본 플레이어 사용 (재생 오류 발생 시)",
         value=False,
@@ -853,7 +889,6 @@ def focus_sound_player():
     )
 
     if basic_player:
-
         st.audio(
             audio,
             format=audio_format,
@@ -862,14 +897,14 @@ def focus_sound_player():
         )
 
         st.caption(
-            "기본 플레이어에서는 원본 음원 길이가 표시됩니다."
+            "기본 플레이어에서는 "
+            "원본 음원 길이가 표시됩니다."
         )
 
     else:
-
         continuous_player(
             audio,
-            audio_format
+            audio_format,
         )
 
     st.caption(
@@ -881,6 +916,7 @@ def focus_sound_player():
 
 # 메인 화면
 def main():
+    reset_legacy_session()
 
     show_sidebar()
     init_timer()
