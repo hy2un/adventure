@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,6 +14,7 @@ from bookplanet_db import (
     connect,
     reset_legacy_session,
 )
+
 
 st.set_page_config(
     page_title="북플래닛 | 독서 성장 기록",
@@ -28,6 +29,9 @@ TODAY = datetime.now(
 ).date()
 
 MONTH = TODAY.strftime("%Y-%m")
+
+MIN_YEAR = 2000
+MAX_YEAR = 2100
 
 
 # 사용자별 기록 불러오기
@@ -98,10 +102,12 @@ def load_data():
             (uid,),
         ).fetchall()
 
+        # 과거 활동까지 확인할 수 있도록
+        # 기존 최대 1000개 조회 제한 제거
         events = db.execute(
             "SELECT book_key,kind,event_date,created_at "
             "FROM reading_events WHERE user_id=? "
-            "ORDER BY id DESC LIMIT 1000",
+            "ORDER BY id DESC",
             (uid,),
         ).fetchall()
 
@@ -359,41 +365,423 @@ def sidebar():
             )
 
 
-# 독서 활동 달력
-def activity_calendar(events):
-    st.markdown(
-        f"### 🗓️ {TODAY.year}년 "
-        f"{TODAY.month}월 독서 활동"
+# 달력 초기 설정
+def init_calendar():
+    st.session_state.setdefault(
+        "rg_calendar_date",
+        TODAY,
     )
 
+
+# 달력 선택 날짜 변경
+def set_calendar_date(selected):
+    st.session_state["rg_calendar_date"] = selected
+
+    st.session_state["rg_calendar_year"] = (
+        selected.year
+    )
+
+    st.session_state["rg_calendar_month"] = (
+        selected.month
+    )
+
+
+# 이전 달 및 다음 달 이동
+def move_calendar_month(direction):
+    selected = st.session_state.get(
+        "rg_calendar_date",
+        TODAY,
+    )
+
+    year = selected.year
+    month = selected.month + direction
+
+    if month < 1:
+        year -= 1
+        month = 12
+
+    elif month > 12:
+        year += 1
+        month = 1
+
+    if not MIN_YEAR <= year <= MAX_YEAR:
+        return
+
+    last_day = calendar.monthrange(
+        year,
+        month,
+    )[1]
+
+    day = min(
+        selected.day,
+        last_day,
+    )
+
+    set_calendar_date(
+        date(year, month, day)
+    )
+
+
+# 연도 및 월 직접 선택
+def change_calendar_month():
+    selected = st.session_state.get(
+        "rg_calendar_date",
+        TODAY,
+    )
+
+    year = int(
+        st.session_state["rg_calendar_year"]
+    )
+
+    month = int(
+        st.session_state["rg_calendar_month"]
+    )
+
+    last_day = calendar.monthrange(
+        year,
+        month,
+    )[1]
+
+    day = min(
+        selected.day,
+        last_day,
+    )
+
+    set_calendar_date(
+        date(year, month, day)
+    )
+
+
+# 이번 달로 이동
+def return_to_today():
+    set_calendar_date(TODAY)
+
+
+# 선택한 날짜의 활동 기록 확인
+def show_daily_events(selected, events, books):
+    selected_text = selected.isoformat()
+
+    daily_events = [
+        event
+        for event in events
+        if str(event["event_date"]) == selected_text
+    ]
+
+    st.markdown(
+        f"#### 📅 {selected.year}년 "
+        f"{selected.month}월 {selected.day}일 활동 기록"
+    )
+
+    if not daily_events:
+        st.info(
+            "선택한 날짜에 기록된 독서 활동이 없습니다."
+        )
+
+        return
+
+    st.caption(
+        f"총 {len(daily_events)}개의 독서 활동"
+    )
+
+    icons = {
+        "독후감": "📝",
+        "한줄평": "💬",
+        "책갈피": "🔖",
+        "독서 진도": "📖",
+        "완독": "🏆",
+    }
+
+    daily_events.sort(
+        key=lambda event: str(
+            event.get("created_at", "")
+        ),
+        reverse=True,
+    )
+
+    for event in daily_events:
+        key = event["book_key"]
+
+        book = books.get(
+            key,
+            {
+                "title": key.split("|")[0],
+                "author": "",
+            },
+        )
+
+        kind = event["kind"]
+
+        icon = icons.get(
+            kind,
+            "📚",
+        )
+
+        created = str(
+            event.get("created_at", "")
+        )
+
+        try:
+            timestamp = datetime.fromisoformat(
+                created
+            )
+
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.astimezone(
+                    ZoneInfo("Asia/Seoul")
+                )
+
+            activity_time = timestamp.strftime(
+                "%H:%M"
+            )
+
+        except (ValueError, TypeError):
+            activity_time = ""
+
+        with st.container(border=True):
+            st.markdown(
+                f"**📘 {book['title']}**"
+            )
+
+            if book.get("author"):
+                st.caption(book["author"])
+
+            st.write(
+                f"{icon} {kind}"
+            )
+
+            if activity_time:
+                st.caption(
+                    f"기록 시간: {activity_time}"
+                )
+
+
+# 독서 활동 달력
+def activity_calendar(events, books):
+    init_calendar()
+
+    selected = st.session_state[
+        "rg_calendar_date"
+    ]
+
+    st.markdown("### 🗓️ 독서 활동 달력")
+
+    # 위젯과 현재 선택 날짜 동기화
+    st.session_state["rg_calendar_year"] = (
+        selected.year
+    )
+
+    st.session_state["rg_calendar_month"] = (
+        selected.month
+    )
+
+    # 달력 이동 버튼
+    left, middle, right = st.columns(3)
+
+    with left:
+        st.button(
+            "◀ 이전 달",
+            key="rg_previous_month",
+            use_container_width=True,
+            on_click=move_calendar_month,
+            args=(-1,),
+            disabled=(
+                selected.year == MIN_YEAR
+                and selected.month == 1
+            ),
+        )
+
+    with middle:
+        st.button(
+            "이번 달",
+            key="rg_today_month",
+            use_container_width=True,
+            on_click=return_to_today,
+        )
+
+    with right:
+        st.button(
+            "다음 달 ▶",
+            key="rg_next_month",
+            use_container_width=True,
+            on_click=move_calendar_month,
+            args=(1,),
+            disabled=(
+                selected.year == MAX_YEAR
+                and selected.month == 12
+            ),
+        )
+
+    # 연도 및 월 직접 선택
+    year_col, month_col = st.columns(2)
+
+    with year_col:
+        st.selectbox(
+            "연도 선택",
+            list(
+                range(
+                    MIN_YEAR,
+                    MAX_YEAR + 1,
+                )
+            ),
+            format_func=lambda y: f"{y}년",
+            key="rg_calendar_year",
+            on_change=change_calendar_month,
+        )
+
+    with month_col:
+        st.selectbox(
+            "월 선택",
+            list(range(1, 13)),
+            format_func=lambda m: f"{m}월",
+            key="rg_calendar_month",
+            on_change=change_calendar_month,
+        )
+
+    selected = st.session_state[
+        "rg_calendar_date"
+    ]
+
+    year = selected.year
+    month = selected.month
+
+    displayed_month = (
+        f"{year:04d}-{month:02d}"
+    )
+
+    # 해당 월 활동 날짜
     active_days = {
         str(event["event_date"])
         for event in events
-        if str(event["event_date"]).startswith(MONTH)
+        if str(
+            event["event_date"]
+        ).startswith(displayed_month)
     }
 
-    for col, name in zip(
-        st.columns(7),
-        ("월", "화", "수", "목", "금", "토", "일"),
-    ):
-        col.markdown(f"**{name}**")
+    st.markdown(
+        f"""
+        <div style="
+            text-align:center;
+            font-size:26px;
+            font-weight:700;
+            color:#397B57;
+            padding:16px 0;
+        ">
+            {year}년 {month}월
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    for week in calendar.monthcalendar(
-        TODAY.year, TODAY.month
-    ):
-        for col, day in zip(st.columns(7), week):
+    # 요일 표시
+    weekdays = (
+        "월", "화", "수", "목",
+        "금", "토", "일",
+    )
 
-            if not day:
+    for index, (col, name) in enumerate(
+        zip(st.columns(7), weekdays)
+    ):
+        color = (
+            "#D65A5A"
+            if index == 6
+            else "#4683C5"
+            if index == 5
+            else "#668173"
+        )
+
+        col.markdown(
+            f"""
+            <div style="
+                text-align:center;
+                font-weight:700;
+                color:{color};
+            ">
+                {name}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # 월별 달력 생성
+    weeks = calendar.Calendar(
+        firstweekday=0
+    ).monthdayscalendar(
+        year,
+        month,
+    )
+
+    for week in weeks:
+        columns = st.columns(7)
+
+        for col, day in zip(
+            columns,
+            week,
+        ):
+            if day == 0:
                 col.write(" ")
+                continue
 
-            elif f"{MONTH}-{day:02d}" in active_days:
-                col.markdown(f"🟢 **{day}**")
+            current_date = date(
+                year,
+                month,
+                day,
+            )
 
-            else:
-                col.write(str(day))
+            date_text = (
+                current_date.isoformat()
+            )
+
+            has_activity = (
+                date_text in active_days
+            )
+
+            is_selected = (
+                current_date == selected
+            )
+
+            # 독서 기록이 있는 날짜 표시
+            label = (
+                f"🟢 {day}"
+                if has_activity
+                else str(day)
+            )
+
+            with col:
+                st.button(
+                    label,
+                    key=f"rg_day_{date_text}",
+                    use_container_width=True,
+                    type=(
+                        "primary"
+                        if is_selected
+                        else "secondary"
+                    ),
+                    on_click=set_calendar_date,
+                    args=(current_date,),
+                    help=(
+                        "독서 활동 기록 보기"
+                        if has_activity
+                        else "날짜 선택"
+                    ),
+                )
 
     st.caption(
-        "🟢 기록을 저장한 날짜를 표시합니다."
+        "🟢 독서 활동 기록이 있는 날짜입니다. "
+        "날짜를 클릭하면 활동 내용을 확인할 수 있습니다."
+    )
+
+    st.caption(
+        f"{month}월 독서 활동일: "
+        f"{len(active_days)}일"
+    )
+
+    st.divider()
+
+    # 선택한 날짜의 상세 기록
+    show_daily_events(
+        selected,
+        events,
+        books,
     )
 
 
@@ -409,7 +797,10 @@ def show_report(report):
 
     for title, field in fields:
         st.markdown(f"**{title}**")
-        st.write(report.get(field, ""))
+
+        st.write(
+            report.get(field, "")
+        )
 
     st.caption(
         "저장된 독후감은 열람만 가능합니다."
@@ -434,6 +825,7 @@ def open_activity(key, book, zone):
 # 메인 화면
 def main():
     reset_legacy_session()
+
     sidebar()
 
     st.title("📊 독서 성장 기록")
@@ -453,7 +845,9 @@ def main():
         data = load_data()
 
     except (psycopg.Error, OSError):
-        st.error("독서 기록을 불러올 수 없습니다.")
+        st.error(
+            "독서 기록을 불러올 수 없습니다."
+        )
         return
 
     books = data["books"]
@@ -510,16 +904,25 @@ def main():
     ]
 
     for col, label, value in zip(
-        st.columns(4), labels, values
+        st.columns(4),
+        labels,
+        values,
     ):
-        col.metric(label, value)
+        col.metric(
+            label,
+            value,
+        )
 
     st.divider()
 
     # 월간 목표 설정
-    st.markdown("### 🎯 이번 달 독서 목표")
+    st.markdown(
+        "### 🎯 이번 달 독서 목표"
+    )
 
-    target = int(goals.get(MONTH, 4))
+    target = int(
+        goals.get(MONTH, 4)
+    )
 
     left, right = st.columns([2, 1])
 
@@ -529,7 +932,10 @@ def main():
                 "이번 달 완독 목표(권)",
                 min_value=1,
                 max_value=30,
-                value=max(1, min(30, target)),
+                value=max(
+                    1,
+                    min(30, target),
+                ),
             )
 
             clicked = st.form_submit_button(
@@ -551,13 +957,18 @@ def main():
         )
 
     st.progress(
-        min(1.0, monthly / max(target, 1))
+        min(
+            1.0,
+            monthly / max(target, 1),
+        )
     )
 
     st.divider()
 
     # 책별 독서 진도
-    st.markdown("### 📖 책별 독서 진도")
+    st.markdown(
+        "### 📖 책별 독서 진도"
+    )
 
     if not books:
         st.info(
@@ -568,19 +979,27 @@ def main():
     else:
         keys = list(books)
 
-        current = st.session_state.get("bm_selected")
+        current = st.session_state.get(
+            "bm_selected"
+        )
 
         key = st.selectbox(
             "진도 기록할 책",
             keys,
             index=(
                 keys.index(current)
-                if current in keys else 0
+                if current in keys
+                else 0
             ),
-            format_func=lambda k: books[k]["title"],
+            format_func=lambda k: (
+                books[k]["title"]
+            ),
         )
 
-        old = progress.get(key, {})
+        old = progress.get(
+            key,
+            {},
+        )
 
         with st.form(f"rg_progress_{key}"):
             total = st.number_input(
@@ -588,7 +1007,8 @@ def main():
                 min_value=1,
                 max_value=100000,
                 value=max(
-                    1, int(old.get("total_pages", 1))
+                    1,
+                    int(old.get("total_pages", 1)),
                 ),
             )
 
@@ -597,7 +1017,8 @@ def main():
                 min_value=0,
                 max_value=100000,
                 value=max(
-                    0, int(old.get("current_page", 0))
+                    0,
+                    int(old.get("current_page", 0)),
                 ),
             )
 
@@ -606,7 +1027,8 @@ def main():
                 ("읽는 중", "완독"),
                 horizontal=True,
                 index=(
-                    1 if old.get("status") == "완독"
+                    1
+                    if old.get("status") == "완독"
                     else 0
                 ),
             )
@@ -643,12 +1065,18 @@ def main():
 
     st.divider()
 
-    activity_calendar(events)
+    # 월 이동 및 날짜 선택이 가능한 달력
+    activity_calendar(
+        events,
+        books,
+    )
 
     st.divider()
 
     # 작성한 독서 활동 열람
-    st.markdown("### 📝 작성한 독서 활동 확인")
+    st.markdown(
+        "### 📝 작성한 독서 활동 확인"
+    )
 
     st.caption(
         "독후감은 도서 활동에서 작성하며, "
@@ -664,7 +1092,9 @@ def main():
     )
 
     if not keys:
-        st.info("아직 작성한 기록이 없습니다.")
+        st.info(
+            "아직 작성한 기록이 없습니다."
+        )
 
     for key in keys:
         book = books.get(
@@ -690,15 +1120,24 @@ def main():
             f"{' · '.join(labels)}"
         ):
 
+            # 독후감은 열람만 가능
             if key in reports:
-                show_report(reports[key])
+                show_report(
+                    reports[key]
+                )
 
+            # 한줄평은 수정 가능
             if key in reviews:
                 st.divider()
-                st.markdown("**💬 한줄평**")
+
+                st.markdown(
+                    "**💬 한줄평**"
+                )
 
                 st.write(
-                    "⭐" * int(reviews[key]["rating"]),
+                    "⭐" * int(
+                        reviews[key]["rating"]
+                    ),
                     reviews[key]["text"],
                 )
 
@@ -706,21 +1145,36 @@ def main():
                     "한줄평 수정하기",
                     key=f"rg_review_{key}",
                 ):
-                    open_activity(key, book, 0)
+                    open_activity(
+                        key,
+                        book,
+                        0,
+                    )
 
+            # 책갈피는 수정 가능
             if key in bookmarks:
                 st.divider()
-                st.markdown("**🔖 책갈피 문장**")
+
+                st.markdown(
+                    "**🔖 책갈피 문장**"
+                )
 
                 st.write(
-                    bookmarks[key].get("quote", "")
+                    bookmarks[key].get(
+                        "quote",
+                        "",
+                    )
                 )
 
                 if st.button(
                     "책갈피 수정하기",
                     key=f"rg_bookmark_{key}",
                 ):
-                    open_activity(key, book, 2)
+                    open_activity(
+                        key,
+                        book,
+                        2,
+                    )
 
     st.caption(
         "로그인한 사용자의 독서 목표와 진도, "
